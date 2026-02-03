@@ -95,7 +95,7 @@ UNITY_CHEAT_PROFILE = ProfileConfig(
     acf_builder="StubACFBuilder",  # ACF builder unchanged
     location_resolver="LocationResolverCheat",
     entity_resolver="EntityResolverCheat",
-    event_resolver="StubEventResolver",  # Will be upgraded in Phase 5
+    event_resolver="EventResolverStateChange",  # Phase 5: State change events
     retriever="StubRetriever",  # Will be upgraded in Phase 6
     boundary_detector="StubBoundaryDetector",
     dialog_manager="CLIDialogManager",  # Interactive CLI
@@ -207,7 +207,7 @@ class ModuleFactory:
         
         # Create remaining modules
         acf_builder = self._create_acf_builder()
-        event_resolver = self._create_event_resolver()
+        event_resolver = self._create_event_resolver(graph_store, dialog_manager)
         retriever = self._create_retriever()
         boundary_detector = self._create_boundary_detector()
         
@@ -318,13 +318,26 @@ class ModuleFactory:
         
         raise ValueError(f"Unknown entity resolver: {name}")
 
-    def _create_event_resolver(self) -> "EventResolver":
+    def _create_event_resolver(
+        self,
+        graph_store: "GraphStore" = None,
+        dialog_manager: "DialogManager" = None,
+    ) -> "EventResolver":
         """Create the event resolver."""
         name = self.profile.event_resolver
         
         if name == "StubEventResolver":
             from episodic_agent.modules.stubs import StubEventResolver
             return StubEventResolver(seed=self.seed)
+        
+        elif name == "EventResolverStateChange":
+            from episodic_agent.modules.event_resolver import EventResolverStateChange
+            return EventResolverStateChange(
+                graph_store=graph_store,
+                dialog_manager=dialog_manager,
+                auto_label_events=self.params.get("auto_label_events", False),
+                prompt_for_unknown_events=self.params.get("prompt_for_unknown_events", True),
+            )
         
         raise ValueError(f"Unknown event resolver: {name}")
 

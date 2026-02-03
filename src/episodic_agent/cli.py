@@ -91,6 +91,10 @@ def format_unity_step_summary(
     boundary: bool,
     frame_id: int | None = None,
     connection_state: str = "unknown",
+    recent_events: list[dict] | None = None,
+    recent_deltas: list[dict] | None = None,
+    event_count: int = 0,
+    delta_count: int = 0,
 ) -> str:
     """Format an enhanced step summary for Unity mode.
     
@@ -103,6 +107,10 @@ def format_unity_step_summary(
         boundary: Whether boundary was triggered.
         frame_id: Last frame ID from Unity.
         connection_state: WebSocket connection state.
+        recent_events: Recent events in current ACF.
+        recent_deltas: Recent deltas in current ACF.
+        event_count: Total event count in ACF.
+        delta_count: Total delta count in ACF.
         
     Returns:
         Formatted summary string.
@@ -120,11 +128,25 @@ def format_unity_step_summary(
     
     frame_str = f"#{frame_id}" if frame_id is not None else "#?"
     
+    # Format recent events
+    event_str = ""
+    if recent_events:
+        # Show last 2 events with labels
+        event_labels = [e.get("label", "?")[:20] for e in recent_events[-2:]]
+        event_str = f" 🎬{event_count}:[{', '.join(event_labels)}]"
+    elif event_count > 0:
+        event_str = f" 🎬{event_count}"
+    
+    # Format recent deltas
+    delta_str = ""
+    if delta_count > 0:
+        delta_str = f" Δ{delta_count}"
+    
     return (
         f"[{step:04d}] {conn_icon} {frame_str} "
         f"📍 {location}({location_conf:.0%}) "
         f"👁 [{entity_str}] "
-        f"📚 {episodes}"
+        f"📚 {episodes}{delta_str}{event_str}"
         f"{boundary_marker}"
     )
 
@@ -264,7 +286,7 @@ def run(
     
     # Print header
     if not quiet:
-        typer.echo(f"Episodic Memory Agent - Phase 4")
+        typer.echo(f"Episodic Memory Agent - Phase 5")
         typer.echo(f"Run ID: {run_id}")
         typer.echo(f"Profile: {profile_config.name} - {profile_config.description}")
         if is_unity:
@@ -307,6 +329,21 @@ def run(
                             else:
                                 conn_state = "unknown"
                             
+                            # Get recent events and deltas from ACF (Phase 5)
+                            recent_events = []
+                            recent_deltas = []
+                            event_count = 0
+                            delta_count = 0
+                            
+                            if orchestrator.acf:
+                                recent_events = orchestrator.acf.get_recent_events(3)
+                                recent_deltas = orchestrator.acf.get_recent_deltas(3)
+                                event_count = len(orchestrator.acf.events)
+                                # Get delta count from extras
+                                delta_count = len(orchestrator.acf.deltas)
+                                if "deltas" in orchestrator.acf.extras:
+                                    delta_count += len(orchestrator.acf.extras["deltas"])
+                            
                             summary = format_unity_step_summary(
                                 step=result.step_number,
                                 location=result.location_label,
@@ -316,6 +353,10 @@ def run(
                                 boundary=result.boundary_triggered,
                                 frame_id=result.frame_id,
                                 connection_state=conn_state,
+                                recent_events=recent_events,
+                                recent_deltas=recent_deltas,
+                                event_count=event_count,
+                                delta_count=delta_count,
                             )
                         else:
                             summary = format_step_summary(
@@ -378,12 +419,30 @@ def run(
                 
                 locations = graph_store.get_nodes_by_type(NodeType.LOCATION)
                 entities = graph_store.get_nodes_by_type(NodeType.ENTITY)
+                events = graph_store.get_nodes_by_type(NodeType.EVENT)
                 
                 typer.echo(f"Learned locations: {len(locations)}")
                 for loc in locations:
                     typer.echo(f"  - {loc.label} (visits: {loc.access_count})")
                 
                 typer.echo(f"Learned entities: {len(entities)}")
+                
+                # Show learned events (Phase 5)
+                typer.echo(f"Learned event patterns: {len(events)}")
+                for evt in events:
+                    pattern = evt.extras.get("pattern_signature", "?")
+                    typer.echo(f"  - {evt.label} [{pattern}]")
+            
+            # Show event resolver stats (Phase 5)
+            event_resolver = modules.get("event_resolver")
+            if hasattr(event_resolver, "events_detected"):
+                typer.echo("")
+                typer.echo("Phase 5 Statistics:")
+                typer.echo(f"  Deltas detected: {event_resolver.deltas_detected}")
+                typer.echo(f"  Events detected: {event_resolver.events_detected}")
+                typer.echo(f"  Events labeled: {event_resolver.events_labeled}")
+                typer.echo(f"  Events recognized: {event_resolver.events_recognized}")
+                typer.echo(f"  Questions asked: {event_resolver.questions_asked}")
 
 
 @app.command()

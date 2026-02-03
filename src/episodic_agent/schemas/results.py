@@ -162,6 +162,38 @@ class StepResult(BaseModel):
         description="IDs of label conflicts resolved this step",
     )
     
+    # Phase 5 metrics
+    delta_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of deltas detected this step",
+    )
+    deltas_total: int = Field(
+        default=0,
+        ge=0,
+        description="Total deltas in current episode",
+    )
+    events_detected_total: int = Field(
+        default=0,
+        ge=0,
+        description="Total events detected by resolver",
+    )
+    events_labeled_total: int = Field(
+        default=0,
+        ge=0,
+        description="Total new event labels learned",
+    )
+    events_recognized_total: int = Field(
+        default=0,
+        ge=0,
+        description="Total events recognized from learned patterns",
+    )
+    questions_asked_total: int = Field(
+        default=0,
+        ge=0,
+        description="Total labeling questions asked",
+    )
+    
     # Forward-compatible extras (for Unity fields, etc.)
     extras: dict[str, Any] = Field(
         default_factory=dict,
@@ -206,6 +238,17 @@ class StepResult(BaseModel):
             result["conflicts_created"] = self.conflicts_created
         if self.conflicts_resolved:
             result["conflicts_resolved"] = self.conflicts_resolved
+        
+        # Add Phase 5 metrics
+        if self.delta_count > 0 or self.deltas_total > 0:
+            result["phase5_metrics"] = {
+                "delta_count": self.delta_count,
+                "deltas_total": self.deltas_total,
+                "events_detected_total": self.events_detected_total,
+                "events_labeled_total": self.events_labeled_total,
+                "events_recognized_total": self.events_recognized_total,
+                "questions_asked_total": self.questions_asked_total,
+            }
             
         result["extras"] = self.extras
         return result

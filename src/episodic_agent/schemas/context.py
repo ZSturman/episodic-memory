@@ -61,6 +61,12 @@ class ActiveContextFrame(BaseModel):
         description="Events detected in current episode",
     )
     
+    # Delta context (changes detected this episode) - Phase 5
+    deltas: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Deltas (changes) detected in current episode",
+    )
+    
     # Most recent percept
     current_percept: Percept | None = Field(
         default=None,
@@ -84,6 +90,32 @@ class ActiveContextFrame(BaseModel):
     def touch(self) -> None:
         """Update the modification timestamp."""
         self.updated_at = datetime.now()
+    
+    def get_recent_deltas(self, count: int = 5) -> list[dict[str, Any]]:
+        """Get the most recent deltas.
+        
+        Args:
+            count: Maximum number of deltas to return.
+            
+        Returns:
+            List of recent delta dictionaries.
+        """
+        # Combine deltas from field and extras for backward compatibility
+        all_deltas = list(self.deltas)
+        if "deltas" in self.extras:
+            all_deltas.extend(self.extras["deltas"])
+        return all_deltas[-count:] if all_deltas else []
+    
+    def get_recent_events(self, count: int = 5) -> list[dict[str, Any]]:
+        """Get the most recent events.
+        
+        Args:
+            count: Maximum number of events to return.
+            
+        Returns:
+            List of recent event dictionaries.
+        """
+        return self.events[-count:] if self.events else []
 
 
 class Episode(BaseModel):
@@ -128,6 +160,12 @@ class Episode(BaseModel):
     events: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Events that occurred during this episode",
+    )
+    
+    # Deltas detected during episode (Phase 5)
+    deltas: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Deltas (changes) detected during this episode",
     )
     
     # Episode-level embedding for retrieval

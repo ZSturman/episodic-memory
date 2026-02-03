@@ -175,6 +175,31 @@ class AgentOrchestrator:
         if should_freeze:
             self._freeze_episode(boundary_reason or "unknown")
         
+        # Gather Phase 5 metrics from event resolver
+        delta_count = 0
+        deltas_total = 0
+        events_detected_total = 0
+        events_labeled_total = 0
+        events_recognized_total = 0
+        questions_asked_total = 0
+        
+        # Get deltas from current step (stored in ACF extras by event resolver)
+        if "deltas" in self._acf.extras:
+            deltas_total = len(self._acf.extras["deltas"])
+        deltas_total += len(self._acf.deltas)
+        
+        # Get event resolver stats if available
+        if hasattr(self._event_resolver, "events_detected"):
+            events_detected_total = self._event_resolver.events_detected
+        if hasattr(self._event_resolver, "events_labeled"):
+            events_labeled_total = self._event_resolver.events_labeled
+        if hasattr(self._event_resolver, "events_recognized"):
+            events_recognized_total = self._event_resolver.events_recognized
+        if hasattr(self._event_resolver, "questions_asked"):
+            questions_asked_total = self._event_resolver.questions_asked
+        if hasattr(self._event_resolver, "deltas_detected"):
+            delta_count = self._event_resolver.deltas_detected
+        
         # Build step result for logging
         return StepResult(
             run_id=self._run_id,
@@ -189,6 +214,12 @@ class AgentOrchestrator:
             episode_count=self._episode_store.count(),
             boundary_triggered=should_freeze,
             boundary_reason=boundary_reason,
+            delta_count=delta_count,
+            deltas_total=deltas_total,
+            events_detected_total=events_detected_total,
+            events_labeled_total=events_labeled_total,
+            events_recognized_total=events_recognized_total,
+            questions_asked_total=questions_asked_total,
         )
 
     def _freeze_episode(self, reason: str) -> Episode:
@@ -208,6 +239,11 @@ class AgentOrchestrator:
         
         now = datetime.now()
         
+        # Gather deltas from ACF (from extras where event resolver stores them)
+        deltas = list(self._acf.deltas)
+        if "deltas" in self._acf.extras:
+            deltas.extend(self._acf.extras.get("deltas", []))
+        
         episode = Episode(
             episode_id=f"ep_{uuid.uuid4().hex[:12]}",
             created_at=now,
@@ -219,6 +255,7 @@ class AgentOrchestrator:
             location_embedding=self._acf.location_embedding,
             entities=list(self._acf.entities),
             events=list(self._acf.events),
+            deltas=deltas,
             episode_embedding=None,  # Could compute aggregate embedding
             source_acf_id=self._acf.acf_id,
             boundary_reason=reason,

@@ -31,6 +31,11 @@ class EdgeType(str, Enum):
     TYPICAL_IN = "typical_in"   # entity -> location (typical)
     INVOLVES = "involves"       # event involves entity
     
+    # Event relationships (Phase 5)
+    IN_EVENT = "in_event"       # entity -> event (entity participated in event)
+    TRIGGERED_BY = "triggered_by"  # event -> delta that triggered it
+    OCCURRED_IN = "occurred_in" # event -> location where it occurred
+    
     # Label/identity relationships  
     ALIAS_OF = "alias_of"       # node is alias of another
     MERGED_INTO = "merged_into" # node was merged into another

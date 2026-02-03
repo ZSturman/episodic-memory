@@ -38,3 +38,23 @@ BOUNDARY_TIMEOUT_FRAMES: int = 200
 
 # Maximum number of alternative labels per node
 MAX_LABELS_PER_NODE: int = 10
+
+# =============================================================================
+# Delta Detection (Phase 5)
+# =============================================================================
+
+# Movement threshold in units for detecting entity movement
+DEFAULT_MOVE_THRESHOLD: float = 0.5
+
+# Steps entity must be absent before considered "missing"
+DEFAULT_MISSING_WINDOW: int = 3
+
+# =============================================================================
+# Event Detection (Phase 5)
+# =============================================================================
+
+# Confidence threshold for event recognition
+EVENT_RECOGNITION_THRESHOLD: float = 0.7
+
+# Confidence boost for learned event patterns
+LEARNED_EVENT_CONFIDENCE_BOOST: float = 0.15
