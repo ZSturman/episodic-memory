@@ -49,13 +49,13 @@ namespace EpisodicAgent.Core
 
             if (worldManager == null)
             {
-                worldManager = FindObjectOfType<WorldManager>();
+                worldManager = FindFirstObjectByType<WorldManager>();
             }
 
             // Subscribe to interactable state changes
             if (worldManager != null)
             {
-                worldManager.OnEntityStateChanged += HandleEntityStateChanged;
+                worldManager.OnEntityStateChanged += HandleEntityStateChangedWrapper;
             }
         }
 
@@ -63,7 +63,7 @@ namespace EpisodicAgent.Core
         {
             if (worldManager != null)
             {
-                worldManager.OnEntityStateChanged -= HandleEntityStateChanged;
+                worldManager.OnEntityStateChanged -= HandleEntityStateChangedWrapper;
             }
         }
 
@@ -147,14 +147,14 @@ namespace EpisodicAgent.Core
         private string GetCurrentRoomGuid()
         {
             if (worldManager == null) return "";
-            var room = worldManager.GetCurrentRoom();
+            var room = worldManager.CurrentRoom;
             return room != null ? room.Guid : "";
         }
 
         private string GetCurrentRoomLabel()
         {
             if (worldManager == null) return "unknown";
-            var room = worldManager.GetCurrentRoom();
+            var room = worldManager.CurrentRoom;
             return room != null ? room.Label : "unknown";
         }
 
@@ -164,7 +164,7 @@ namespace EpisodicAgent.Core
 
             if (worldManager == null) return entities;
 
-            foreach (var marker in worldManager.GetAllEntities())
+            foreach (var marker in worldManager.Entities)
             {
                 if (marker == null) continue;
 
@@ -179,7 +179,7 @@ namespace EpisodicAgent.Core
                     label = marker.Label,
                     category = marker.Category,
                     position = new Vector3Data(marker.transform.position),
-                    size = new Vector3Data(marker.ApproximateSize),
+                    size = new Vector3Data(GetEntitySize(marker)),
                     distance = playerCamera != null 
                         ? Vector3.Distance(playerCamera.position, marker.transform.position) 
                         : 0f,
@@ -204,6 +204,26 @@ namespace EpisodicAgent.Core
             }
 
             return entities;
+        }
+
+        private Vector3 GetEntitySize(EntityMarker marker)
+        {
+            // Try to get size from renderer bounds
+            Renderer renderer = marker.GetComponent<Renderer>();
+            if (renderer != null)
+            {
+                return renderer.bounds.size;
+            }
+
+            // Try to get size from collider
+            Collider collider = marker.GetComponent<Collider>();
+            if (collider != null)
+            {
+                return collider.bounds.size;
+            }
+
+            // Default size
+            return Vector3.one;
         }
 
         private bool IsEntityVisible(EntityMarker marker)
@@ -244,7 +264,7 @@ namespace EpisodicAgent.Core
         {
             var interactable = marker.GetComponent<InteractableState>();
             if (interactable == null) return null;
-            return interactable.InteractableType.ToString().ToLower();
+            return interactable.Type.ToString().ToLower();
         }
 
         private string GetInteractableState(EntityMarker marker)
@@ -252,6 +272,12 @@ namespace EpisodicAgent.Core
             var interactable = marker.GetComponent<InteractableState>();
             if (interactable == null) return null;
             return interactable.CurrentState;
+        }
+
+        private void HandleEntityStateChangedWrapper(EntityMarker marker, string oldState, string newState)
+        {
+            if (marker == null) return;
+            HandleEntityStateChanged(marker.Guid, oldState, newState);
         }
 
         private void HandleEntityStateChanged(string entityGuid, string oldState, string newState)
@@ -266,6 +292,11 @@ namespace EpisodicAgent.Core
             };
             _pendingStateChanges.Add(change);
         }
+
+        /// <summary>
+        /// Get the target streaming frame rate.
+        /// </summary>
+        public float TargetHz => targetFrameRate;
 
         /// <summary>
         /// Set the target streaming frame rate.

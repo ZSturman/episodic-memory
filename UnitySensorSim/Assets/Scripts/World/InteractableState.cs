@@ -34,6 +34,7 @@ namespace EpisodicAgent.World
         public string CurrentState => GetStateAtIndex(currentStateIndex);
         public int CurrentStateIndex => currentStateIndex;
         public int StateCount => GetStateCount();
+        public StateType Type => stateType;
 
         private EntityMarker entityMarker;
 

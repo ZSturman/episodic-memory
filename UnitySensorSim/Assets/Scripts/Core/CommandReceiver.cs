@@ -34,7 +34,7 @@ namespace EpisodicAgent.Core
 
             if (worldManager == null)
             {
-                worldManager = FindObjectOfType<WorldManager>();
+                worldManager = FindFirstObjectByType<WorldManager>();
             }
         }
 

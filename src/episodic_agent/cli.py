@@ -454,6 +454,214 @@ def profiles() -> None:
 
 
 @app.command()
+def report(
+    run_folder: Path = typer.Argument(
+        ...,
+        help="Path to run folder (e.g., runs/20260202_174416)",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+    ),
+    html: bool = typer.Option(
+        False,
+        "--html",
+        "-H",
+        help="Open HTML report in browser after generation",
+    ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        "-q",
+        help="Only save reports, don't print to console",
+    ),
+) -> None:
+    """Generate report from a run folder.
+    
+    Generates both text and HTML reports from run data.
+    
+    Example:
+        python -m episodic_agent report runs/20260202_174416
+        python -m episodic_agent report runs/20260202_174416 --html
+    """
+    from episodic_agent.report import ReportGenerator
+    
+    typer.echo(f"Generating reports for {run_folder}...")
+    
+    try:
+        generator = ReportGenerator(run_folder)
+        text_path, html_path = generator.save_reports()
+        
+        if not quiet:
+            # Print text report to console
+            text_report = generator.generate_text_report()
+            typer.echo("")
+            typer.echo(text_report)
+            typer.echo("")
+        
+        typer.echo(f"Text report: {text_path}")
+        typer.echo(f"HTML report: {html_path}")
+        
+        if html:
+            import webbrowser
+            webbrowser.open(f"file://{html_path.absolute()}")
+            typer.echo("Opened HTML report in browser.")
+            
+    except Exception as e:
+        typer.echo(f"Error generating report: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def scenario(
+    scenario_name: str = typer.Argument(
+        ...,
+        help="Scenario to run: walk_rooms, toggle_drawer_light, spawn_move_ball, mixed",
+    ),
+    profile: str = typer.Option(
+        "unity_full",
+        "--profile",
+        "-p",
+        help="Module profile to use (unity_cheat, unity_full)",
+    ),
+    output_dir: Path = typer.Option(
+        Path("runs"),
+        "--output",
+        "-o",
+        help="Output directory for run logs",
+    ),
+    unity_ws: Optional[str] = typer.Option(
+        None,
+        "--unity-ws",
+        help="Unity WebSocket URL (overrides profile default)",
+    ),
+    replay_file: Optional[Path] = typer.Option(
+        None,
+        "--replay",
+        "-r",
+        help="JSONL file for sensor replay (offline mode)",
+    ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        "-q",
+        help="Suppress per-step output",
+    ),
+    seed: int = typer.Option(
+        42,
+        "--seed",
+        "-s",
+        help="Random seed for deterministic behavior",
+    ),
+) -> None:
+    """Run an automated scenario.
+    
+    Executes pre-defined test scenarios for evaluation.
+    
+    Available scenarios:
+      - walk_rooms: Walk through all rooms
+      - toggle_drawer_light: Toggle drawer and lights
+      - spawn_move_ball: Spawn and move a ball
+      - mixed: All above combined
+    
+    Example:
+        python -m episodic_agent scenario walk_rooms
+        python -m episodic_agent scenario mixed --profile unity_full
+        python -m episodic_agent scenario walk_rooms --replay replay.jsonl
+    """
+    from datetime import datetime
+    import json
+    
+    from episodic_agent.scenarios.runner import ScenarioRunner
+    from episodic_agent.scenarios.definitions import (
+        WalkRoomsScenario,
+        ToggleDrawerLightScenario,
+        SpawnMoveBallScenario,
+        MixedScenario,
+    )
+    
+    setup_logging(verbose=False)
+    
+    # Map scenario names to classes
+    scenarios = {
+        "walk_rooms": WalkRoomsScenario,
+        "toggle_drawer_light": ToggleDrawerLightScenario,
+        "spawn_move_ball": SpawnMoveBallScenario,
+        "mixed": MixedScenario,
+    }
+    
+    if scenario_name not in scenarios:
+        typer.echo(f"Unknown scenario: {scenario_name}", err=True)
+        typer.echo(f"Available: {', '.join(scenarios.keys())}", err=True)
+        raise typer.Exit(1)
+    
+    # Get profile config
+    try:
+        profile_config = get_profile(profile)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+    
+    # Create run directory
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = output_dir / f"{timestamp}_scenario_{scenario_name}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
+    typer.echo(f"Running scenario: {scenario_name}")
+    typer.echo(f"Profile: {profile}")
+    typer.echo(f"Output: {run_dir}")
+    
+    # Create scenario instance
+    scenario_cls = scenarios[scenario_name]
+    scenario_instance = scenario_cls()
+    
+    # Create runner with profile and output dir
+    runner = ScenarioRunner(
+        output_dir=output_dir,
+        profile=profile,
+        verbose=not quiet,
+    )
+    
+    typer.echo("-" * 60)
+    typer.echo("Starting scenario...")
+    
+    # Run scenario
+    result = runner.run(scenario_instance)
+    
+    # Print results
+    typer.echo("-" * 60)
+    typer.echo(f"Scenario: {result.scenario_name}")
+    typer.echo(f"Success: {'✓' if result.success else '✗'}")
+    typer.echo(f"Steps: {result.steps_completed}")
+    typer.echo(f"Episodes: {result.episodes_created}")
+    typer.echo(f"Duration: {result.duration_seconds:.1f}s")
+    
+    if result.error:
+        typer.echo(f"Error: {result.error}", err=True)
+    
+    # Save result
+    result_path = run_dir / "scenario_result.json"
+    with open(result_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "scenario_name": result.scenario_name,
+            "success": result.success,
+            "steps_completed": result.steps_completed,
+            "episodes_created": result.episodes_created,
+            "duration_seconds": result.duration_seconds,
+            "error": result.error,
+        }, f, indent=2)
+    
+    typer.echo(f"Result saved: {result_path}")
+    
+    # Generate report
+    typer.echo("")
+    typer.echo("Generating report...")
+    from episodic_agent.report import ReportGenerator
+    generator = ReportGenerator(run_dir)
+    text_path, html_path = generator.save_reports()
+    typer.echo(f"Report: {html_path}")
+
+
+@app.command()
 def version() -> None:
     """Show version information."""
     from episodic_agent import __version__

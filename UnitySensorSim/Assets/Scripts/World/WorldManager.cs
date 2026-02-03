@@ -103,14 +103,14 @@ namespace EpisodicAgent.World
             entities.Clear();
 
             // Find all rooms
-            RoomVolume[] foundRooms = FindObjectsOfType<RoomVolume>();
+            RoomVolume[] foundRooms = FindObjectsByType<RoomVolume>(FindObjectsSortMode.None);
             foreach (var room in foundRooms)
             {
                 RegisterRoom(room);
             }
 
             // Find all entities
-            EntityMarker[] foundEntities = FindObjectsOfType<EntityMarker>();
+            EntityMarker[] foundEntities = FindObjectsByType<EntityMarker>(FindObjectsSortMode.None);
             foreach (var entity in foundEntities)
             {
                 RegisterEntity(entity);
@@ -425,7 +425,7 @@ namespace EpisodicAgent.World
                 change_type = changeType,
                 old_value = oldValue,
                 new_value = newValue,
-                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0
+                timestamp = DateTime.UtcNow.ToString("o")
             };
 
             pendingStateChanges.Add(change);

@@ -28,8 +28,10 @@ namespace EpisodicAgent.Core
 
         // Events
         public event Action<string> OnMessageReceived;
+#pragma warning disable CS0067
         public event Action<int> OnClientConnected;
         public event Action<int> OnClientDisconnected;
+#pragma warning restore CS0067
 
         // Public properties
         public bool IsRunning => _isRunning;

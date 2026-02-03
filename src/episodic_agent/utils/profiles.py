@@ -32,6 +32,7 @@ class ProfileName(str, Enum):
     
     STUB = "stub"           # All stub modules (Phase 1 testing)
     UNITY_CHEAT = "unity_cheat"  # Unity with cheat perception
+    UNITY_FULL = "unity_full"    # Phase 6: Full features with spreading activation
     # Future profiles:
     # UNITY_REAL = "unity_real"  # Unity with real perception
     # FILE_REPLAY = "file_replay"  # Replay from recorded data
@@ -110,10 +111,42 @@ UNITY_CHEAT_PROFILE = ProfileConfig(
 )
 
 
+UNITY_FULL_PROFILE = ProfileConfig(
+    name="unity_full",
+    description="Phase 6: Full features with spreading activation and prediction",
+    sensor_provider="UnityWebSocketSensorProvider",
+    perception="PerceptionUnityCheat",
+    acf_builder="StubACFBuilder",
+    location_resolver="LocationResolverCheat",
+    entity_resolver="EntityResolverCheat",
+    event_resolver="EventResolverStateChange",
+    retriever="SpreadingActivationRetriever",  # Phase 6: Spreading activation
+    boundary_detector="HysteresisBoundaryDetector",  # Phase 6: Hysteresis with prediction error
+    dialog_manager="CLIDialogManager",
+    episode_store="PersistentEpisodeStore",
+    graph_store="LabeledGraphStore",
+    parameters={
+        "ws_url": "ws://localhost:8765",
+        "auto_label_locations": False,
+        "auto_label_entities": True,
+        "use_persistent_storage": True,
+        # Spreading activation parameters
+        "spreading_decay": 0.85,
+        "spreading_max_hops": 3,
+        "spreading_min_activation": 0.1,
+        "spreading_top_k": 5,
+        # Hysteresis boundary parameters
+        "boundary_high_threshold": 0.7,
+        "boundary_prediction_error_threshold": 0.6,
+    },
+)
+
+
 # Profile registry
 PROFILES: dict[str, ProfileConfig] = {
     "stub": STUB_PROFILE,
     "unity_cheat": UNITY_CHEAT_PROFILE,
+    "unity_full": UNITY_FULL_PROFILE,
 }
 
 
@@ -179,6 +212,9 @@ class ModuleFactory:
         self.params = dict(profile.parameters)
         self.params.update(overrides)
         
+        # Track created modules for dependency injection
+        self._modules: dict[str, Any] = {}
+        
         # Ensure run directory exists
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -191,6 +227,10 @@ class ModuleFactory:
         # Create stores first (others may depend on them)
         episode_store = self._create_episode_store()
         graph_store = self._create_graph_store()
+        
+        # Store for dependency injection
+        self._modules["episode_store"] = episode_store
+        self._modules["graph_store"] = graph_store
         
         # Create dialog manager
         dialog_manager = self._create_dialog_manager()
@@ -349,6 +389,17 @@ class ModuleFactory:
             from episodic_agent.modules.stubs import StubRetriever
             return StubRetriever(seed=self.seed)
         
+        elif name == "SpreadingActivationRetriever":
+            from episodic_agent.modules.retriever import RetrieverSpreadingActivation
+            return RetrieverSpreadingActivation(
+                graph_store=self._modules.get("graph_store"),
+                episode_store=self._modules.get("episode_store"),
+                decay_factor=self.params.get("spreading_decay", 0.85),
+                max_hops=self.params.get("spreading_max_hops", 3),
+                min_activation_threshold=self.params.get("spreading_min_activation", 0.1),
+                top_k_default=self.params.get("spreading_top_k", 5),
+            )
+        
         raise ValueError(f"Unknown retriever: {name}")
 
     def _create_boundary_detector(self) -> "BoundaryDetector":
@@ -360,6 +411,13 @@ class ModuleFactory:
             return StubBoundaryDetector(
                 freeze_interval=self.params.get("freeze_interval", 50),
                 seed=self.seed,
+            )
+        
+        elif name == "HysteresisBoundaryDetector":
+            from episodic_agent.modules.boundary import HysteresisBoundaryDetector
+            return HysteresisBoundaryDetector(
+                location_confidence_threshold=self.params.get("boundary_high_threshold", 0.7),
+                prediction_error_threshold=self.params.get("boundary_prediction_error_threshold", 0.6),
             )
         
         raise ValueError(f"Unknown boundary detector: {name}")

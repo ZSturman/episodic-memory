@@ -38,19 +38,19 @@ namespace EpisodicAgent.UI
             // Auto-find components
             if (webSocketServer == null)
             {
-                webSocketServer = FindObjectOfType<WebSocketServer>();
+                webSocketServer = FindFirstObjectByType<WebSocketServer>();
             }
             if (sensorStreamer == null)
             {
-                sensorStreamer = FindObjectOfType<SensorStreamer>();
+                sensorStreamer = FindFirstObjectByType<SensorStreamer>();
             }
             if (worldManager == null)
             {
-                worldManager = FindObjectOfType<WorldManager>();
+                worldManager = FindFirstObjectByType<WorldManager>();
             }
             if (playerInteraction == null)
             {
-                playerInteraction = FindObjectOfType<PlayerInteraction>();
+                playerInteraction = FindFirstObjectByType<PlayerInteraction>();
             }
         }
 
@@ -127,7 +127,7 @@ namespace EpisodicAgent.UI
 
             // Connection status
             bool isConnected = webSocketServer != null && webSocketServer.IsRunning;
-            int clientCount = webSocketServer?.ClientCount ?? 0;
+            int clientCount = webSocketServer?.ConnectedClients ?? 0;
             
             string statusText = isConnected 
                 ? $"● Connected ({clientCount} client{(clientCount != 1 ? "s" : "")})" 
@@ -145,7 +145,7 @@ namespace EpisodicAgent.UI
             y += lineHeight;
 
             // Frame rate
-            float targetHz = sensorStreamer?.TargetFrameRate ?? 0;
+            float targetHz = sensorStreamer?.TargetHz ?? 0;
             GUI.Label(new Rect(x, y, panelWidth, lineHeight), 
                 $"Sensor Rate: {targetHz:F1} Hz", labelStyle);
             y += lineHeight;
