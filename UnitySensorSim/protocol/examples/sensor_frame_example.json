@@ -1,0 +1,48 @@
+{
+  "protocol_version": "1.0.0",
+  "frame_id": 42,
+  "timestamp": 1704067200.123,
+  "camera_pose": {
+    "position": { "x": 2.5, "y": 1.6, "z": -3.2 },
+    "rotation": { "x": 15.0, "y": 45.0, "z": 0.0 },
+    "forward": { "x": 0.65, "y": -0.26, "z": 0.71 }
+  },
+  "current_room": "room-living-001",
+  "current_room_label": "Living Room",
+  "entities": [
+    {
+      "guid": "door-front-001",
+      "label": "Front Door",
+      "category": "door",
+      "position": { "x": 0.0, "y": 1.0, "z": 5.0 },
+      "rotation": { "x": 0.0, "y": 90.0, "z": 0.0 },
+      "state": "Closed",
+      "visible": true,
+      "distance": 4.2,
+      "room_guid": "room-living-001"
+    },
+    {
+      "guid": "lamp-table-001",
+      "label": "Table Lamp",
+      "category": "item",
+      "position": { "x": 3.0, "y": 0.8, "z": -2.0 },
+      "rotation": { "x": 0.0, "y": 0.0, "z": 0.0 },
+      "state": "On",
+      "visible": true,
+      "distance": 1.5,
+      "room_guid": "room-living-001"
+    },
+    {
+      "guid": "sofa-main-001",
+      "label": "Sofa",
+      "category": "furniture",
+      "position": { "x": -2.0, "y": 0.4, "z": 0.0 },
+      "rotation": { "x": 0.0, "y": 180.0, "z": 0.0 },
+      "state": "default",
+      "visible": false,
+      "distance": 5.8,
+      "room_guid": "room-living-001"
+    }
+  ],
+  "state_changes": []
+}

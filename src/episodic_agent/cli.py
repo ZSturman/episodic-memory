@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import typer
 
@@ -23,12 +26,28 @@ from episodic_agent.modules.stubs import (
     StubSensorProvider,
 )
 from episodic_agent.utils.config import DEFAULT_FREEZE_INTERVAL
+from episodic_agent.utils.profiles import (
+    ModuleFactory,
+    get_profile,
+    list_profiles,
+    PROFILES,
+)
 
 app = typer.Typer(
     name="episodic-agent",
     help="Event-segmented episodic memory agent",
     add_completion=False,
 )
+
+
+def setup_logging(verbose: bool = False) -> None:
+    """Configure logging based on verbosity."""
+    level = logging.DEBUG if verbose else logging.WARNING
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
 
 def format_step_summary(
@@ -63,13 +82,60 @@ def format_step_summary(
     )
 
 
+def format_unity_step_summary(
+    step: int,
+    location: str,
+    location_conf: float,
+    entity_summary: dict[str, int],
+    episodes: int,
+    boundary: bool,
+    frame_id: int | None = None,
+    connection_state: str = "unknown",
+) -> str:
+    """Format an enhanced step summary for Unity mode.
+    
+    Args:
+        step: Current step number.
+        location: Location label.
+        location_conf: Location confidence.
+        entity_summary: Dict of category -> count.
+        episodes: Episode count.
+        boundary: Whether boundary was triggered.
+        frame_id: Last frame ID from Unity.
+        connection_state: WebSocket connection state.
+        
+    Returns:
+        Formatted summary string.
+    """
+    boundary_marker = " 📦" if boundary else ""
+    
+    # Format entity summary
+    if entity_summary:
+        entity_str = " ".join(f"{cat}:{cnt}" for cat, cnt in sorted(entity_summary.items()))
+    else:
+        entity_str = "none"
+    
+    # Connection indicator
+    conn_icon = "🟢" if connection_state == "connected" else "🟡" if "connect" in connection_state else "🔴"
+    
+    frame_str = f"#{frame_id}" if frame_id is not None else "#?"
+    
+    return (
+        f"[{step:04d}] {conn_icon} {frame_str} "
+        f"📍 {location}({location_conf:.0%}) "
+        f"👁 [{entity_str}] "
+        f"📚 {episodes}"
+        f"{boundary_marker}"
+    )
+
+
 @app.command()
 def run(
     steps: int = typer.Option(
         100,
         "--steps",
         "-n",
-        help="Number of steps to run",
+        help="Number of steps to run (0 = infinite for Unity mode)",
     ),
     fps: float = typer.Option(
         10.0,
@@ -101,12 +167,44 @@ def run(
         "-q",
         help="Suppress per-step output",
     ),
+    profile: str = typer.Option(
+        "stub",
+        "--profile",
+        "-p",
+        help="Module profile to use (stub, unity_cheat)",
+    ),
+    unity_ws: Optional[str] = typer.Option(
+        None,
+        "--unity-ws",
+        help="Unity WebSocket URL (overrides profile default)",
+    ),
+    auto_label: bool = typer.Option(
+        False,
+        "--auto-label",
+        help="Auto-generate labels without prompting",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Enable verbose logging",
+    ),
 ) -> None:
     """Run the episodic memory agent loop.
     
     Executes the cognitive loop for the specified number of steps,
     writing JSONL logs to runs/<timestamp>/run.jsonl.
+    
+    Examples:
+    
+        # Run with stub modules (Phase 1 testing)
+        python -m episodic_agent.cli run --profile stub --steps 200
+        
+        # Run with Unity integration
+        python -m episodic_agent.cli run --profile unity_cheat --unity-ws ws://localhost:8765 --fps 10
     """
+    setup_logging(verbose)
+    
     # Generate run ID from timestamp
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = output_dir / run_id
@@ -116,78 +214,184 @@ def run(
     # Calculate step interval from FPS
     step_interval = 1.0 / fps if fps > 0 else 0.0
     
-    # Initialize all stub modules with seed
-    sensor = StubSensorProvider(max_frames=steps, seed=seed)
-    perception = StubPerception(seed=seed)
-    acf_builder = StubACFBuilder(seed=seed)
-    location_resolver = StubLocationResolver(seed=seed)
-    entity_resolver = StubEntityResolver(seed=seed)
-    event_resolver = StubEventResolver(seed=seed)
-    retriever = StubRetriever(seed=seed)
-    boundary_detector = StubBoundaryDetector(freeze_interval=freeze_interval, seed=seed)
-    dialog_manager = StubDialogManager(auto_accept=True, seed=seed)
-    episode_store = InMemoryEpisodeStore()
-    graph_store = InMemoryGraphStore()
+    # Get profile and create modules
+    try:
+        profile_config = get_profile(profile)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    
+    # Build parameter overrides
+    overrides = {
+        "freeze_interval": freeze_interval,
+    }
+    if unity_ws:
+        overrides["ws_url"] = unity_ws
+    if auto_label:
+        overrides["auto_label_locations"] = True
+        overrides["auto_label_entities"] = True
+    
+    # Create module factory
+    factory = ModuleFactory(
+        profile=profile_config,
+        run_dir=run_dir,
+        seed=seed,
+        **overrides,
+    )
+    
+    # Create all modules
+    modules = factory.create_modules()
     
     # Create orchestrator
     orchestrator = AgentOrchestrator(
-        sensor=sensor,
-        perception=perception,
-        acf_builder=acf_builder,
-        location_resolver=location_resolver,
-        entity_resolver=entity_resolver,
-        event_resolver=event_resolver,
-        retriever=retriever,
-        boundary_detector=boundary_detector,
-        dialog_manager=dialog_manager,
-        episode_store=episode_store,
-        graph_store=graph_store,
+        sensor=modules["sensor"],
+        perception=modules["perception"],
+        acf_builder=modules["acf_builder"],
+        location_resolver=modules["location_resolver"],
+        entity_resolver=modules["entity_resolver"],
+        event_resolver=modules["event_resolver"],
+        retriever=modules["retriever"],
+        boundary_detector=modules["boundary_detector"],
+        dialog_manager=modules["dialog_manager"],
+        episode_store=modules["episode_store"],
+        graph_store=modules["graph_store"],
         run_id=run_id,
     )
     
+    # Determine if Unity mode for enhanced output
+    is_unity = profile.lower() == "unity_cheat"
+    infinite_mode = steps == 0 and is_unity
+    
     # Print header
     if not quiet:
-        typer.echo(f"Episodic Memory Agent - Phase 1")
+        typer.echo(f"Episodic Memory Agent - Phase 4")
         typer.echo(f"Run ID: {run_id}")
-        typer.echo(f"Steps: {steps}, FPS: {fps}, Seed: {seed}, Freeze Interval: {freeze_interval}")
+        typer.echo(f"Profile: {profile_config.name} - {profile_config.description}")
+        if is_unity:
+            ws_url = overrides.get("ws_url") or profile_config.parameters.get("ws_url")
+            typer.echo(f"Unity WS: {ws_url}")
+        typer.echo(f"Steps: {'∞' if infinite_mode else steps}, FPS: {fps}, Seed: {seed}")
         typer.echo(f"Log: {log_path}")
         typer.echo("-" * 60)
     
     # Run the loop with logging
-    with LogWriter(log_path) as logger:
-        for _ in range(steps):
-            step_start = time.perf_counter()
-            
-            # Execute one step
-            result = orchestrator.step()
-            
-            # Log the result
-            logger.write(result)
-            
-            # Print summary
-            if not quiet:
-                summary = format_step_summary(
-                    step=result.step_number,
-                    location=result.location_label,
-                    location_conf=result.location_confidence,
-                    entities=result.entity_count,
-                    events=result.event_count,
-                    episodes=result.episode_count,
-                    boundary=result.boundary_triggered,
-                )
-                typer.echo(summary)
-            
-            # Throttle to target FPS
-            elapsed = time.perf_counter() - step_start
-            if step_interval > elapsed:
-                time.sleep(step_interval - elapsed)
+    step_count = 0
+    
+    try:
+        with LogWriter(log_path) as logger:
+            while True:
+                step_start = time.perf_counter()
+                
+                try:
+                    # Execute one step
+                    result = orchestrator.step()
+                    step_count += 1
+                    
+                    # Log the result
+                    logger.write(result)
+                    
+                    # Print summary
+                    if not quiet:
+                        if is_unity:
+                            # Get entity resolver for summary
+                            entity_resolver = modules.get("entity_resolver")
+                            if hasattr(entity_resolver, "get_visible_entity_summary"):
+                                entity_summary = entity_resolver.get_visible_entity_summary()
+                            else:
+                                entity_summary = {}
+                            
+                            # Get sensor provider for connection status
+                            sensor = modules.get("sensor")
+                            if hasattr(sensor, "state"):
+                                conn_state = sensor.state
+                            else:
+                                conn_state = "unknown"
+                            
+                            summary = format_unity_step_summary(
+                                step=result.step_number,
+                                location=result.location_label,
+                                location_conf=result.location_confidence,
+                                entity_summary=entity_summary,
+                                episodes=result.episode_count,
+                                boundary=result.boundary_triggered,
+                                frame_id=result.frame_id,
+                                connection_state=conn_state,
+                            )
+                        else:
+                            summary = format_step_summary(
+                                step=result.step_number,
+                                location=result.location_label,
+                                location_conf=result.location_confidence,
+                                entities=result.entity_count,
+                                events=result.event_count,
+                                episodes=result.episode_count,
+                                boundary=result.boundary_triggered,
+                            )
+                        typer.echo(summary)
+                    
+                except TimeoutError:
+                    if not quiet:
+                        typer.echo("[WARN] Frame timeout, retrying...")
+                    continue
+                except KeyboardInterrupt:
+                    raise
+                except Exception as e:
+                    if not quiet:
+                        typer.echo(f"[ERROR] Step failed: {e}")
+                    if verbose:
+                        import traceback
+                        traceback.print_exc()
+                    continue
+                
+                # Check step limit
+                if not infinite_mode and step_count >= steps:
+                    break
+                
+                # Throttle to target FPS
+                elapsed = time.perf_counter() - step_start
+                if step_interval > elapsed:
+                    time.sleep(step_interval - elapsed)
+    
+    except KeyboardInterrupt:
+        if not quiet:
+            typer.echo("\n" + "-" * 60)
+            typer.echo("Interrupted by user")
+    
+    finally:
+        # Cleanup
+        sensor = modules.get("sensor")
+        if hasattr(sensor, "stop"):
+            sensor.stop()
     
     # Print summary
     if not quiet:
         typer.echo("-" * 60)
-        typer.echo(f"Completed {steps} steps")
+        typer.echo(f"Completed {step_count} steps")
         typer.echo(f"Episodes frozen: {orchestrator.episode_count}")
         typer.echo(f"Log written to: {log_path}")
+        
+        # Show learned locations/entities for Unity mode
+        if is_unity:
+            graph_store = modules.get("graph_store")
+            if hasattr(graph_store, "get_nodes_by_type"):
+                from episodic_agent.schemas import NodeType
+                
+                locations = graph_store.get_nodes_by_type(NodeType.LOCATION)
+                entities = graph_store.get_nodes_by_type(NodeType.ENTITY)
+                
+                typer.echo(f"Learned locations: {len(locations)}")
+                for loc in locations:
+                    typer.echo(f"  - {loc.label} (visits: {loc.access_count})")
+                
+                typer.echo(f"Learned entities: {len(entities)}")
+
+
+@app.command()
+def profiles() -> None:
+    """List available profiles."""
+    typer.echo("Available profiles:\n")
+    for name, desc in list_profiles():
+        typer.echo(f"  {name:15s} - {desc}")
 
 
 @app.command()

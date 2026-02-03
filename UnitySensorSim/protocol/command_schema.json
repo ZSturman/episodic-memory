@@ -1,0 +1,111 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "command.schema.json",
+  "title": "CommandMessage",
+  "description": "Command message from Python to Unity for testing and automation",
+  "type": "object",
+  "required": ["command"],
+  "properties": {
+    "command": {
+      "type": "string",
+      "description": "Command type to execute",
+      "enum": [
+        "teleport_player",
+        "toggle_interactable",
+        "spawn_ball",
+        "despawn_ball",
+        "move_ball",
+        "reset_world",
+        "get_world_state"
+      ]
+    },
+    "command_id": {
+      "type": "string",
+      "description": "Unique identifier for tracking command responses"
+    },
+    "parameters": {
+      "$ref": "#/definitions/CommandParams"
+    }
+  },
+  "definitions": {
+    "CommandParams": {
+      "type": "object",
+      "description": "Command-specific parameters",
+      "properties": {
+        "room_guid": {
+          "type": "string",
+          "description": "Target room GUID for teleport_player command"
+        },
+        "entity_guid": {
+          "type": "string",
+          "description": "Target entity GUID for toggle_interactable command"
+        },
+        "target_state": {
+          "type": "string",
+          "description": "Specific state to set (optional, otherwise toggles)"
+        },
+        "position": {
+          "$ref": "#/definitions/Vector3",
+          "description": "Target position for spawn_ball or move_ball commands"
+        }
+      }
+    },
+    "Vector3": {
+      "type": "object",
+      "description": "3D vector or point",
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" }
+      }
+    },
+    "CommandResponse": {
+      "type": "object",
+      "description": "Response sent from Unity after processing a command",
+      "required": ["command_id", "success"],
+      "properties": {
+        "command_id": {
+          "type": "string",
+          "description": "Echoed command ID for correlation"
+        },
+        "success": {
+          "type": "boolean",
+          "description": "Whether the command succeeded"
+        },
+        "error_message": {
+          "type": "string",
+          "description": "Error description if success is false"
+        },
+        "data": {
+          "type": "object",
+          "description": "Optional response data"
+        }
+      }
+    }
+  },
+  "examples": {
+    "teleport_player": {
+      "command": "teleport_player",
+      "command_id": "cmd-001",
+      "parameters": {
+        "room_guid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      }
+    },
+    "toggle_interactable": {
+      "command": "toggle_interactable",
+      "command_id": "cmd-002",
+      "parameters": {
+        "entity_guid": "door-123",
+        "target_state": "Open"
+      }
+    },
+    "spawn_ball": {
+      "command": "spawn_ball",
+      "command_id": "cmd-003",
+      "parameters": {
+        "position": { "x": 5.0, "y": 1.0, "z": 3.0 }
+      }
+    }
+  }
+}

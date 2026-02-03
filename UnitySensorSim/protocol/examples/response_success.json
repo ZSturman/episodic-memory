@@ -1,0 +1,6 @@
+{
+  "_comment": "Successful command response",
+  "command_id": "cmd-toggle-001",
+  "success": true,
+  "error_message": null
+}

@@ -1,0 +1,8 @@
+{
+  "_comment": "Teleport player to bedroom",
+  "command": "teleport_player",
+  "command_id": "cmd-teleport-001",
+  "parameters": {
+    "room_guid": "room-bedroom-001"
+  }
+}

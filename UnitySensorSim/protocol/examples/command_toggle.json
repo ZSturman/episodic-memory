@@ -1,0 +1,9 @@
+{
+  "_comment": "Toggle the front door to Open state",
+  "command": "toggle_interactable",
+  "command_id": "cmd-toggle-001",
+  "parameters": {
+    "entity_guid": "door-front-001",
+    "target_state": "Open"
+  }
+}

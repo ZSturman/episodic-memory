@@ -1,0 +1,6 @@
+{
+  "_comment": "Failed command response - entity not found",
+  "command_id": "cmd-toggle-002",
+  "success": false,
+  "error_message": "Entity not found: nonexistent-entity-guid"
+}

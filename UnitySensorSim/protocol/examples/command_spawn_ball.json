@@ -1,0 +1,12 @@
+{
+  "_comment": "Spawn a ball at a specific position",
+  "command": "spawn_ball",
+  "command_id": "cmd-spawn-001",
+  "parameters": {
+    "position": {
+      "x": 5.0,
+      "y": 1.0,
+      "z": 3.0
+    }
+  }
+}

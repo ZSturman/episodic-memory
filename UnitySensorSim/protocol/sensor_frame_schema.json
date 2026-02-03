@@ -1,0 +1,150 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "sensor_frame.schema.json",
+  "title": "SensorFrame",
+  "description": "A single sensor frame streamed from Unity to Python containing world state snapshot",
+  "type": "object",
+  "required": ["protocol_version", "frame_id", "timestamp", "camera_pose", "current_room", "entities"],
+  "properties": {
+    "protocol_version": {
+      "type": "string",
+      "description": "Protocol version for backward compatibility",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "examples": ["1.0.0"]
+    },
+    "frame_id": {
+      "type": "integer",
+      "description": "Monotonically increasing frame identifier",
+      "minimum": 0
+    },
+    "timestamp": {
+      "type": "number",
+      "description": "Unix timestamp in seconds with millisecond precision"
+    },
+    "camera_pose": {
+      "$ref": "#/definitions/CameraPose"
+    },
+    "current_room": {
+      "type": ["string", "null"],
+      "description": "GUID of the room the player is currently in, or null if not in any room"
+    },
+    "current_room_label": {
+      "type": ["string", "null"],
+      "description": "Human-readable label of the current room"
+    },
+    "entities": {
+      "type": "array",
+      "description": "List of all tracked entities in the world",
+      "items": {
+        "$ref": "#/definitions/EntityData"
+      }
+    },
+    "state_changes": {
+      "type": "array",
+      "description": "List of state changes since last frame",
+      "items": {
+        "$ref": "#/definitions/StateChangeEvent"
+      }
+    }
+  },
+  "definitions": {
+    "CameraPose": {
+      "type": "object",
+      "description": "Player camera position and orientation",
+      "required": ["position", "rotation", "forward"],
+      "properties": {
+        "position": {
+          "$ref": "#/definitions/Vector3"
+        },
+        "rotation": {
+          "$ref": "#/definitions/Vector3",
+          "description": "Euler angles in degrees"
+        },
+        "forward": {
+          "$ref": "#/definitions/Vector3",
+          "description": "Forward direction vector"
+        }
+      }
+    },
+    "Vector3": {
+      "type": "object",
+      "description": "3D vector or point",
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" }
+      }
+    },
+    "EntityData": {
+      "type": "object",
+      "description": "Data for a single tracked entity",
+      "required": ["guid", "label", "category", "position"],
+      "properties": {
+        "guid": {
+          "type": "string",
+          "description": "Stable unique identifier for this entity"
+        },
+        "label": {
+          "type": "string",
+          "description": "Human-readable name"
+        },
+        "category": {
+          "type": "string",
+          "description": "Entity category (e.g., furniture, door, item)"
+        },
+        "position": {
+          "$ref": "#/definitions/Vector3"
+        },
+        "rotation": {
+          "$ref": "#/definitions/Vector3",
+          "description": "Euler angles in degrees"
+        },
+        "state": {
+          "type": "string",
+          "description": "Current state for interactables (e.g., Open, Closed)"
+        },
+        "visible": {
+          "type": "boolean",
+          "description": "Whether entity is visible from player camera"
+        },
+        "distance": {
+          "type": "number",
+          "description": "Distance from player in units"
+        },
+        "room_guid": {
+          "type": ["string", "null"],
+          "description": "GUID of the room this entity is in"
+        }
+      }
+    },
+    "StateChangeEvent": {
+      "type": "object",
+      "description": "A state change that occurred since the last frame",
+      "required": ["entity_guid", "change_type", "old_value", "new_value", "timestamp"],
+      "properties": {
+        "entity_guid": {
+          "type": "string",
+          "description": "GUID of the entity that changed, or 'player' for player events"
+        },
+        "change_type": {
+          "type": "string",
+          "description": "Type of change (e.g., state_changed, room_changed, spawned, despawned)",
+          "enum": ["state_changed", "room_changed", "spawned", "despawned"]
+        },
+        "old_value": {
+          "type": "string",
+          "description": "Previous value"
+        },
+        "new_value": {
+          "type": "string",
+          "description": "New value"
+        },
+        "timestamp": {
+          "type": "number",
+          "description": "Unix timestamp when change occurred"
+        }
+      }
+    }
+  }
+}
