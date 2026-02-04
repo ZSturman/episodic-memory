@@ -15,9 +15,11 @@ from episodic_agent.schemas import EdgeType, GraphEdge, GraphNode, NodeType
 
 def _node_to_dict(node: GraphNode) -> dict[str, Any]:
     """Convert a GraphNode to a JSON-serializable dictionary."""
+    # node_type is now a string, not an enum with .value
+    node_type_str = node.node_type if isinstance(node.node_type, str) else node.node_type
     return {
         "node_id": node.node_id,
-        "node_type": node.node_type.value,
+        "node_type": node_type_str,
         "label": node.label,
         "labels": node.labels,
         "embedding": node.embedding,
@@ -34,9 +36,11 @@ def _node_to_dict(node: GraphNode) -> dict[str, Any]:
 
 def _dict_to_node(data: dict[str, Any]) -> GraphNode:
     """Convert a dictionary back to a GraphNode."""
+    # node_type is now a string (not NodeType enum)
+    node_type_val = data["node_type"]
     return GraphNode(
         node_id=data["node_id"],
-        node_type=NodeType(data["node_type"]),
+        node_type=node_type_val,  # Pass string directly
         label=data.get("label", "unknown"),
         labels=data.get("labels", []),
         embedding=data.get("embedding"),
@@ -53,9 +57,11 @@ def _dict_to_node(data: dict[str, Any]) -> GraphNode:
 
 def _edge_to_dict(edge: GraphEdge) -> dict[str, Any]:
     """Convert a GraphEdge to a JSON-serializable dictionary."""
+    # edge_type is now a string, not an enum with .value
+    edge_type_str = edge.edge_type if isinstance(edge.edge_type, str) else edge.edge_type
     return {
         "edge_id": edge.edge_id,
-        "edge_type": edge.edge_type.value,
+        "edge_type": edge_type_str,
         "source_node_id": edge.source_node_id,
         "target_node_id": edge.target_node_id,
         "weight": edge.weight,
@@ -68,9 +74,11 @@ def _edge_to_dict(edge: GraphEdge) -> dict[str, Any]:
 
 def _dict_to_edge(data: dict[str, Any]) -> GraphEdge:
     """Convert a dictionary back to a GraphEdge."""
+    # edge_type is now a string (not EdgeType enum)
+    edge_type_val = data["edge_type"]
     return GraphEdge(
         edge_id=data["edge_id"],
-        edge_type=EdgeType(data["edge_type"]),
+        edge_type=edge_type_val,  # Pass string directly
         source_node_id=data["source_node_id"],
         target_node_id=data["target_node_id"],
         weight=data.get("weight", 1.0),

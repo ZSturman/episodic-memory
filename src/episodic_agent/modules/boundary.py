@@ -113,10 +113,10 @@ class HysteresisBoundaryDetector(BoundaryDetector):
         
         # Phase 6: Salient event settings
         self._salient_event_confidence = salient_event_confidence
-        self._salient_event_types = salient_event_types or [
-            "opened", "closed", "turned_on", "turned_off",
-            "appeared", "disappeared", "picked_up", "put_down"
-        ]
+        # REMOVED: predefined salient_event_types list
+        # All event types are learned from user interaction.
+        # Salience is determined by confidence threshold, not predefined categories.
+        self._salient_event_types = salient_event_types  # User can optionally provide
         
         # Internal state
         self._state = BoundaryState()

@@ -30,9 +30,9 @@ if TYPE_CHECKING:
 class ProfileName(str, Enum):
     """Available profile names."""
     
-    STUB = "stub"           # All stub modules (Phase 1 testing)
+    STUB = "stub"           # All stub modules for testing
     UNITY_CHEAT = "unity_cheat"  # Unity with cheat perception
-    UNITY_FULL = "unity_full"    # Phase 6: Full features with spreading activation
+    UNITY_FULL = "unity_full"    # Full features with memory retrieval and event prediction
     # Future profiles:
     # UNITY_REAL = "unity_real"  # Unity with real perception
     # FILE_REPLAY = "file_replay"  # Replay from recorded data
@@ -71,7 +71,7 @@ class ProfileConfig:
 
 STUB_PROFILE = ProfileConfig(
     name="stub",
-    description="All stub modules for Phase 1 testing",
+    description="Test mode with simulated sensors and basic processing",
     sensor_provider="StubSensorProvider",
     perception="StubPerception",
     acf_builder="StubACFBuilder",
@@ -90,14 +90,14 @@ STUB_PROFILE = ProfileConfig(
 
 UNITY_CHEAT_PROFILE = ProfileConfig(
     name="unity_cheat",
-    description="Unity integration with cheat perception (uses GUIDs)",
+    description="Unity live sensor stream with object tracking and state change detection",
     sensor_provider="UnityWebSocketSensorProvider",
     perception="PerceptionUnityCheat",
-    acf_builder="StubACFBuilder",  # ACF builder unchanged
+    acf_builder="StubACFBuilder",
     location_resolver="LocationResolverCheat",
     entity_resolver="EntityResolverCheat",
-    event_resolver="EventResolverStateChange",  # Phase 5: State change events
-    retriever="StubRetriever",  # Will be upgraded in Phase 6
+    event_resolver="EventResolverStateChange",  # Tracks object state changes
+    retriever="StubRetriever",  # Basic retrieval
     boundary_detector="StubBoundaryDetector",
     dialog_manager="CLIDialogManager",  # Interactive CLI
     episode_store="PersistentEpisodeStore",
@@ -113,7 +113,7 @@ UNITY_CHEAT_PROFILE = ProfileConfig(
 
 UNITY_FULL_PROFILE = ProfileConfig(
     name="unity_full",
-    description="Phase 6: Full features with spreading activation and prediction",
+    description="Unity live stream with memory retrieval, event prediction, and boundary detection",
     sensor_provider="UnityWebSocketSensorProvider",
     perception="PerceptionUnityCheat",
     acf_builder="StubACFBuilder",
@@ -282,6 +282,8 @@ class ModuleFactory:
                 ws_url=self.params.get("ws_url", "ws://localhost:8765"),
                 buffer_size=self.params.get("buffer_size", 100),
                 reconnect_delay=self.params.get("reconnect_delay", 2.0),
+                log_raw_data=self.params.get("log_raw_data", False),
+                use_gateway=self.params.get("use_gateway", True),
             )
         
         raise ValueError(f"Unknown sensor provider: {name}")

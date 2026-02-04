@@ -14,7 +14,21 @@ from typing import Any, Callable
 from episodic_agent.core.interfaces import SensorProvider
 from episodic_agent.schemas import SensorFrame
 
+# Optional gateway integration for validation/preprocessing
+try:
+    from episodic_agent.modules.sensor_gateway import (
+        SensorGateway,
+        SensorType,
+        SensorMessage,
+    )
+    GATEWAY_AVAILABLE = True
+except ImportError:
+    GATEWAY_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+
+# Separate logger for detailed data logging (can be enabled independently)
+data_logger = logging.getLogger(f"{__name__}.data")
 
 # Protocol version we expect from Unity
 EXPECTED_PROTOCOL_VERSION = "1.0.0"
@@ -22,7 +36,8 @@ EXPECTED_PROTOCOL_VERSION = "1.0.0"
 # may not know the current room (agent must discover/learn rooms from sensor data)
 REQUIRED_FIELDS = ["protocol_version", "frame_id", "timestamp"]
 # Optional fields that enhance the frame but aren't required for basic operation
-OPTIONAL_FIELDS = ["current_room", "current_room_guid", "current_room_label", "entities", "camera_pose"]
+# REMOVED: current_room_label - backend owns all semantic labels, Unity only sends GUIDs
+OPTIONAL_FIELDS = ["current_room", "current_room_guid", "entities", "camera_pose"]
 
 
 class ConnectionState:
@@ -43,6 +58,8 @@ class UnityWebSocketSensorProvider(SensorProvider):
     - Protocol version validation
     - Frame buffering with overflow protection
     - Thread-safe frame queue for sync access from agent loop
+    - Optional SensorGateway integration for validation
+    - Detailed data logging for debugging
     
     The provider runs the WebSocket client in a background thread,
     exposing a synchronous get_frame() interface for the orchestrator.
@@ -57,6 +74,9 @@ class UnityWebSocketSensorProvider(SensorProvider):
         on_connect: Callable[[], None] | None = None,
         on_disconnect: Callable[[], None] | None = None,
         validate_protocol: bool = True,
+        use_gateway: bool = True,  # Enable gateway validation
+        log_raw_data: bool = False,  # Log raw Unity data for debugging
+        on_validation_error: Callable[[str], None] | None = None,  # Error callback
     ) -> None:
         """Initialize the Unity WebSocket sensor provider.
         
@@ -68,6 +88,9 @@ class UnityWebSocketSensorProvider(SensorProvider):
             on_connect: Optional callback when connected.
             on_disconnect: Optional callback when disconnected.
             validate_protocol: Whether to validate protocol version.
+            use_gateway: Whether to use SensorGateway for validation.
+            log_raw_data: Whether to log raw Unity data (verbose).
+            on_validation_error: Callback for validation errors.
         """
         self._ws_url = ws_url
         self._buffer_size = buffer_size
@@ -76,6 +99,8 @@ class UnityWebSocketSensorProvider(SensorProvider):
         self._on_connect = on_connect
         self._on_disconnect = on_disconnect
         self._validate_protocol = validate_protocol
+        self._log_raw_data = log_raw_data
+        self._on_validation_error = on_validation_error
         
         # Thread-safe frame buffer
         self._frame_buffer: deque[SensorFrame] = deque(maxlen=buffer_size)
@@ -96,6 +121,26 @@ class UnityWebSocketSensorProvider(SensorProvider):
         
         # Frame availability event (for blocking get_frame)
         self._frame_available = threading.Event()
+        
+        # Initialize gateway for validation if available and enabled
+        self._gateway: SensorGateway | None = None
+        self._use_gateway = use_gateway
+        if use_gateway and GATEWAY_AVAILABLE:
+            self._gateway = SensorGateway(
+                on_user_notification=self._handle_gateway_notification,
+                log_raw_data=log_raw_data,
+            )
+            self._gateway.register_sensor(
+                "unity_main",
+                SensorType.UNITY_WEBSOCKET,
+            )
+            logger.info("SensorGateway initialized for Unity data validation")
+        elif use_gateway and not GATEWAY_AVAILABLE:
+            logger.warning("SensorGateway requested but not available, using basic validation")
+        
+        # Data logging state
+        self._frames_logged = 0
+        self._validation_errors = 0
 
     @property
     def state(self) -> str:
@@ -122,6 +167,35 @@ class UnityWebSocketSensorProvider(SensorProvider):
     def reconnect_count(self) -> int:
         """Get count of reconnection attempts."""
         return self._reconnect_count
+
+    @property
+    def validation_errors(self) -> int:
+        """Get count of validation errors."""
+        return self._validation_errors
+
+    @property
+    def gateway(self) -> "SensorGateway | None":
+        """Get the sensor gateway (if enabled)."""
+        return self._gateway
+
+    def _handle_gateway_notification(self, severity: str, message: str) -> None:
+        """Handle notifications from the gateway.
+        
+        Args:
+            severity: Notification severity level.
+            message: Notification message.
+        """
+        if severity in ("CRITICAL", "ERROR"):
+            logger.error(f"[GATEWAY] {message}")
+            if self._on_validation_error:
+                try:
+                    self._on_validation_error(message)
+                except Exception as e:
+                    logger.warning(f"Validation error callback failed: {e}")
+        elif severity == "WARNING":
+            logger.warning(f"[GATEWAY] {message}")
+        else:
+            logger.info(f"[GATEWAY] {message}")
 
     def start(self) -> None:
         """Start the WebSocket connection in a background thread."""
@@ -221,31 +295,91 @@ class UnityWebSocketSensorProvider(SensorProvider):
         """Receive messages from WebSocket and buffer frames."""
         while self._running and not self._stop_event.is_set():
             try:
+                # Use a longer timeout and handle gracefully
                 message = await asyncio.wait_for(ws.recv(), timeout=1.0)
                 self._handle_message(message)
             except asyncio.TimeoutError:
                 # Check if we should stop
                 continue
+            except TypeError as e:
+                # Handle websockets library version incompatibilities
+                # Some versions have issues with timeout parameter type
+                logger.warning(f"WebSocket type error (possible library version issue): {e}")
+                data_logger.error(f"[WS] TypeError in receive: {e}. Consider checking websockets library version.")
+                # Try to continue without explicit timeout
+                try:
+                    message = await ws.recv()
+                    self._handle_message(message)
+                except Exception as inner_e:
+                    logger.warning(f"Receive error after retry: {inner_e}")
+                    break
             except Exception as e:
                 logger.warning(f"Receive error: {e}")
+                # Log the actual exception type for debugging
+                data_logger.debug(f"Receive exception details: {type(e).__name__}: {e}")
                 break
 
     def _handle_message(self, message: str) -> None:
-        """Parse and validate a received message, queue the frame."""
+        """Parse and validate a received message, queue the frame.
+        
+        Uses SensorGateway for validation if available, otherwise
+        falls back to basic validation.
+        """
+        # Log raw incoming data if enabled
+        if self._log_raw_data:
+            self._frames_logged += 1
+            data_logger.info(f"[UNITY→PYTHON] Frame {self._frames_logged}: {message[:500]}{'...' if len(message) > 500 else ''}")
+        
+        # Parse JSON
         try:
             data = json.loads(message)
         except json.JSONDecodeError as e:
             logger.warning(f"JSON parse error: {e}")
+            data_logger.error(f"[UNITY→PYTHON] Invalid JSON: {message[:200]}")
+            self._validation_errors += 1
             return
         
         # Only handle sensor frames (have frame_id)
         if "frame_id" not in data:
-            # Might be a command response, ignore
+            # Might be a command response, log for debugging
+            data_logger.debug(f"[UNITY→PYTHON] Non-frame message: {list(data.keys())}")
             return
         
-        # Validate required fields
-        if not self._validate_frame_fields(data):
-            return
+        # Log frame summary
+        # ARCHITECTURAL INVARIANT: room label comes from backend, Unity sends GUID only
+        frame_id = data.get("frame_id", "?")
+        room_guid = data.get("current_room_guid") or data.get("current_room", "unknown")
+        entities_count = len(data.get("entities", []))
+        state_changes = len(data.get("state_changes", []))
+        
+        data_logger.debug(
+            f"[UNITY→PYTHON] Frame #{frame_id}: room_guid={room_guid}, "
+            f"entities={entities_count}, state_changes={state_changes}"
+        )
+        
+        # Use gateway for validation if available
+        if self._gateway:
+            gateway_message = self._gateway.process(data, sensor_id="unity_main")
+            
+            if gateway_message.validation and not gateway_message.validation.is_valid:
+                self._validation_errors += 1
+                # Log validation errors
+                for error in gateway_message.validation.errors:
+                    data_logger.warning(f"[VALIDATION] {error.code}: {error.message}")
+                
+                # Use corrected data if available
+                if gateway_message.validation.corrected_data:
+                    data = gateway_message.validation.corrected_data
+                    data_logger.info("[VALIDATION] Using auto-corrected data")
+                else:
+                    # Skip frame if validation failed with no correction
+                    logger.warning(f"Skipping frame {frame_id} due to validation errors")
+                    return
+        else:
+            # Fall back to basic validation
+            if not self._validate_frame_fields(data):
+                self._validation_errors += 1
+                return
         
         # Validate protocol version
         if self._validate_protocol:
@@ -312,22 +446,22 @@ class UnityWebSocketSensorProvider(SensorProvider):
         }
         
         # Handle room info - support both field naming conventions
-        # Unity sends: current_room_guid, current_room_label
+        # Unity sends: current_room_guid (GUID only, no label - backend owns labels)
         # Also support: current_room (for backward compatibility)
         # Note: Room info is OPTIONAL - real-world sensors may not know the current room
         current_room_guid = data.get("current_room_guid") or data.get("current_room")
-        current_room_label = data.get("current_room_label")
+        # REMOVED: current_room_label - backend learns labels from user interaction
         
         # Store sensor data in extras for perception module to process
         # The perception module should use these as observations, not as ground truth
+        # ARCHITECTURAL INVARIANT: Unity provides GUIDs and observables only, no semantic labels
         extras = {
             "protocol_version": data.get("protocol_version"),
-            # Room observation (if available from sensor) - agent must verify/learn this
+            # Room observation (GUID only) - agent must learn/verify label from user
             "current_room_guid": current_room_guid,  
-            "current_room_label": current_room_label,
             # Legacy field name for backward compatibility
             "current_room": current_room_guid,
-            # Entity observations (positions, states) - not identities
+            # Entity observations (positions, states) - no labels, backend learns them
             "entities": data.get("entities", []),
             "state_changes": data.get("state_changes", []),
             "camera_pose": camera_pose,
@@ -418,12 +552,12 @@ class UnityWebSocketSensorProvider(SensorProvider):
         """Get detailed connection status for display.
         
         Returns:
-            Dict with connection state, frame info, etc.
+            Dict with connection state, frame info, validation stats, etc.
         """
         with self._buffer_lock:
             buffer_count = len(self._frame_buffer)
         
-        return {
+        status = {
             "state": self.state,
             "ws_url": self._ws_url,
             "last_frame_id": self._last_frame_id,
@@ -432,7 +566,44 @@ class UnityWebSocketSensorProvider(SensorProvider):
             "reconnect_count": self._reconnect_count,
             "buffer_count": buffer_count,
             "buffer_size": self._buffer_size,
+            "validation_errors": self._validation_errors,
+            "gateway_enabled": self._gateway is not None,
         }
+        
+        # Add gateway stats if available
+        if self._gateway:
+            gateway_stats = self._gateway.get_stats()
+            status["gateway_stats"] = {
+                "total_messages": gateway_stats.get("total_messages", 0),
+                "total_errors": gateway_stats.get("total_errors", 0),
+                "error_rate": gateway_stats.get("error_rate", 0.0),
+            }
+        
+        return status
+
+    def get_recent_errors(self, count: int = 10) -> list[dict]:
+        """Get recent validation errors for debugging.
+        
+        Args:
+            count: Maximum errors to return.
+            
+        Returns:
+            List of recent validation errors.
+        """
+        if not self._gateway:
+            return []
+        
+        errors = self._gateway.get_error_history("unity_main")
+        return [
+            {
+                "code": e.code,
+                "message": e.message,
+                "severity": e.severity.value,
+                "field": e.field_path,
+                "suggestion": e.suggestion,
+            }
+            for e in errors[-count:]
+        ]
 
     def __enter__(self):
         """Context manager entry - start connection."""

@@ -2,6 +2,93 @@
 
 All modules implement abstract base classes defined in `src/episodic_agent/core/interfaces.py`. This enables dependency injection and module swapping without changing the orchestrator.
 
+---
+
+## Architectural Invariants
+
+These invariants are **non-negotiable** and must be enforced by all module implementations.
+
+### ACF Stability Invariant
+
+**Rule:** A location label persists across perceptual variation unless strong contradictory evidence accumulates.
+
+| Scenario | Expected Behavior |
+|----------|------------------|
+| Lighting/shadow change | Identity PERSISTS - not a new location |
+| Temporary clutter | Identity PERSISTS - objects don't define location |
+| Sudden visual change WITHOUT motion | ANOMALY - investigate, don't auto-relabel |
+| Sustained mismatch + spatial contradiction | Enter UNCERTAINTY state |
+
+**Implementation:** `ACFStabilityGuard` in `modules/acf_stability.py`
+
+```python
+from episodic_agent.modules import ACFStabilityGuard, StabilityState
+
+guard = ACFStabilityGuard()
+decision = guard.evaluate_stability(percept, acf, motion_detected=False)
+
+if not decision.identity_stable:
+    # Only after sustained mismatch WITH motion
+    allow_location_transition()
+elif decision.new_state == StabilityState.UNCERTAIN:
+    # Flag for investigation or user confirmation
+    request_clarification()
+```
+
+### Motion Advisory / Perception Authoritative Invariant
+
+**Rule:** If motion implies new location but visual ACF matches previous location, enter uncertainty state and investigate. Never trust motion alone.
+
+| Scenario | Motion Says | Perception Says | Outcome |
+|----------|-------------|-----------------|---------|
+| Normal walk | New location | New location | Allow transition |
+| Elevator | New floor | Same appearance | INVESTIGATE - don't auto-relabel |
+| Teleport | No movement | Different location | ANOMALY - investigate |
+| Stationary | Same location | Same location | Stable |
+
+**Implementation:** `MotionPerceptionArbitrator` in `modules/arbitrator.py`
+
+```python
+from episodic_agent.modules import MotionPerceptionArbitrator, ArbitrationOutcome
+
+arbitrator = MotionPerceptionArbitrator()
+decision = arbitrator.arbitrate(motion_signal, perception_signal)
+
+if decision.outcome == ArbitrationOutcome.TRUST_PERCEPTION:
+    # Perception is authoritative
+    location = decision.resolved_location
+elif decision.outcome == ArbitrationOutcome.INVESTIGATING:
+    # Conflict detected - gathering evidence
+    continue_investigation()
+elif decision.outcome == ArbitrationOutcome.UNCERTAIN:
+    # Needs user confirmation
+    request_user_label()
+```
+
+### No Absolute Coordinates Invariant
+
+**Rule:** Absolute world coordinates must never cross the wire and never be stored in semantic memory.
+
+| Allowed | Not Allowed |
+|---------|-------------|
+| Agent-relative positions | World coordinates in protocol |
+| Landmark-relative offsets | Absolute positions in graph |
+| Qualitative relations ("near", "left of") | Raw (x, y, z) in persistent storage |
+
+### Backend-Owned Cognition Invariant
+
+**Rule:** Python owns ALL labeling logic, recognition reasoning, and memory. Unity/client is stateless.
+
+| Backend (Python) Responsibilities | Client (Unity) Responsibilities |
+|----------------------------------|--------------------------------|
+| Label assignment | Render visuals |
+| Entity recognition | Stream sensor data |
+| Location resolution | Relay user input |
+| Event interpretation | Display backend-provided labels |
+| Memory storage | NOTHING semantic |
+
+---
+
 ## Interface Summary
 
 | Interface | Methods | Purpose |
@@ -17,6 +104,8 @@ All modules implement abstract base classes defined in `src/episodic_agent/core/
 | `DialogManager` | `ask_label()`, `notify()` | User interaction |
 | `EpisodeStore` | `store()`, `get()`, `list_all()` | Episode persistence |
 | `GraphStore` | `add_node()`, `add_edge()`, etc. | Graph persistence |
+| **`ACFStabilityGuard`** | `evaluate_stability()` | **Identity stability enforcement** |
+| **`MotionPerceptionArbitrator`** | `arbitrate()` | **Motion vs perception resolution** |
 
 ---
 

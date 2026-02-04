@@ -545,7 +545,9 @@ class RetrieverSpreadingActivation(Retriever):
         for node_id, activated in result.activated_nodes.items():
             node = self._graph_store.get_node(node_id)
             if node:
-                by_type[node.node_type.value].append((node.label, activated.activation))
+                # node_type is now a string, not enum with .value
+                node_type_str = node.node_type if isinstance(node.node_type, str) else str(node.node_type)
+                by_type[node_type_str].append((node.label, activated.activation))
         
         summary = {
             "total_nodes": len(result.activated_nodes),

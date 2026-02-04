@@ -8,6 +8,54 @@ All data flows through Pydantic v2 models defined in `src/episodic_agent/schemas
 2. **Forward Compatibility** - All models include `extras: dict` field
 3. **Validation** - Pydantic handles all validation
 4. **Serialization** - JSON-serializable for logging and persistence
+5. **Relative Coordinates** - All positions are agent-relative (see below)
+
+---
+
+## Coordinate System Invariants
+
+> **ARCHITECTURAL INVARIANT:** Absolute world coordinates MUST NEVER cross the wire or enter storage.
+
+### All Positions Are Agent-Relative
+
+Every position in the system is expressed relative to the agent (player/camera):
+
+```
+Agent Position = (0, 0, 0)  // Agent is always at origin
+Entity at (2.5, 0, 3.0)     // 2.5m right, 3.0m forward of agent
+```
+
+### Why Relative Coordinates?
+
+1. **Sensor Portability** - Protocol works with any sensor (robot, phone, VR)
+2. **No Coordinate Assumptions** - Backend doesn't depend on Unity's world origin
+3. **Natural Navigation** - Relative positions match human spatial reasoning
+
+### Coordinate Fields
+
+| Field | Frame | Description |
+|-------|-------|-------------|
+| `position.x` | Agent | Meters right (+) or left (-) of agent |
+| `position.y` | Agent | Meters above (+) or below (-) agent |
+| `position.z` | Agent | Meters forward (+) or behind (-) agent |
+| `distance` | Agent | Euclidean distance from agent (always positive) |
+
+### Landmark-Relative Storage
+
+For persistent storage, positions are stored relative to recognized landmarks:
+
+```python
+# Stored edge: "mug is 0.3m left of table"
+edge = GraphEdge(
+    source_id="mug-001",
+    target_id="table-001",
+    edge_type=EDGE_TYPE_NEAR,
+    properties={
+        "relative_position": (-0.3, 0.0, 0.0),  # Landmark-relative
+        "reference_frame": "table-001",
+    }
+)
+```
 
 ---
 
@@ -28,11 +76,12 @@ class SensorFrame(BaseModel):
     extras: dict[str, Any] = {}      # Forward compatibility
 
 # Unity-specific extras:
-# - current_room: str (room GUID)
-# - current_room_label: str (room label if known)
-# - entities: list[dict] (visible entities)
-# - camera_pose: dict (position, rotation, forward)
+# - current_room_guid: str (room GUID only - no label!)
+# - entities: list[dict] (visible entities with RELATIVE positions)
+# - camera_pose: dict (orientation only - position is always origin)
 # - state_changes: list[dict] (state changes since last frame)
+#
+# NOTE: current_room_label is NOT included - backend learns labels from users
 ```
 
 **Location**: `schemas/frames.py`
@@ -378,4 +427,313 @@ frame = SensorFrame(
 # Accessing extras
 if "custom_field" in frame.extras:
     value = frame.extras["custom_field"]
+```
+
+---
+
+## Protocol Schemas
+
+Wire protocol message schemas for sensor-backend communication.
+
+**Location**: `schemas/protocol.py`
+
+> **ARCHITECTURAL INVARIANT:** Protocol is sensor-agnostic and portable. No Unity-specific shortcuts. All messages work with physical sensors.
+
+### MessageType
+
+All valid protocol message types:
+
+```python
+class MessageType(str, Enum):
+    """All valid protocol message types."""
+    
+    # Sensor → Backend
+    SENSOR_FRAME = "sensor_frame"
+    CAPABILITIES_REPORT = "capabilities_report"
+    VISUAL_SUMMARY = "visual_summary"
+    VISUAL_FOCUS = "visual_focus"
+    LABEL_RESPONSE = "label_response"
+    ERROR = "error"
+    
+    # Backend → Sensor
+    FRAME_ACK = "frame_ack"
+    STREAM_CONTROL = "stream_control"
+    FOCUS_REQUEST = "focus_request"
+    LABEL_REQUEST = "label_request"
+    ENTITY_UPDATE = "entity_update"
+    LOCATION_UPDATE = "location_update"
+    
+    # Bidirectional
+    HEARTBEAT = "heartbeat"
+    HANDSHAKE = "handshake"
+```
+
+---
+
+### CapabilitiesReport
+
+Sensor capabilities announcement sent on connection.
+
+```python
+class SensorCapability(str, Enum):
+    """Capabilities a sensor may report."""
+    
+    RGB_CAMERA = "rgb_camera"
+    DEPTH_CAMERA = "depth_camera"
+    STEREO_CAMERA = "stereo_camera"
+    ZOOM = "zoom"
+    FOCUS = "focus"
+    PAN_TILT = "pan_tilt"
+    ODOMETRY = "odometry"
+    IMU = "imu"
+    GPS = "gps"
+    LIDAR = "lidar"
+    BOUNDING_BOXES = "bounding_boxes"
+    SEGMENTATION = "segmentation"
+    TRACKING = "tracking"
+    MICROPHONE = "microphone"
+    SPEECH_TO_TEXT = "speech_to_text"
+    EDGE_COMPUTE = "edge_compute"
+    FEATURE_EXTRACTION = "feature_extraction"
+
+
+class CapabilitiesReport(BaseModel):
+    """Sensor capabilities announcement."""
+    
+    sensor_id: str                              # Unique sensor identifier
+    sensor_type: str                            # Type of sensor
+    sensor_version: str = "1.0.0"               # Protocol version
+    capabilities: list[SensorCapability] = []   # Supported capabilities
+    max_resolution: tuple[int, int] | None = None  # Maximum resolution
+    min_resolution: tuple[int, int] | None = None  # Minimum resolution
+    max_fps: float = 30.0                       # Maximum frame rate
+    min_fps: float = 1.0                        # Minimum frame rate
+    compute_available: bool = False             # Edge compute available
+    compute_tflops: float | None = None         # Compute power
+    buffer_size_mb: int = 50                    # Buffer memory
+    supports_visual_channel: bool = False       # Visual summary support
+    supports_focus_requests: bool = False       # Focus request support
+    extras: dict[str, Any] = {}                 # Additional metadata
+```
+
+---
+
+### StreamControl
+
+Backend command to control sensor stream.
+
+```python
+class StreamControlCommand(str, Enum):
+    """Commands backend can send to control sensor stream."""
+    
+    START = "start"
+    STOP = "stop"
+    PAUSE = "pause"
+    RESUME = "resume"
+    SET_RESOLUTION = "set_resolution"
+    SET_FPS = "set_fps"
+    SET_CROP = "set_crop"
+    CLEAR_CROP = "clear_crop"
+    ENABLE_SUMMARY = "enable_summary"
+    DISABLE_SUMMARY = "disable_summary"
+    REQUEST_KEYFRAME = "request_keyframe"
+
+
+class StreamControl(BaseModel):
+    """Backend command to control sensor stream."""
+    
+    command: StreamControlCommand               # Control command
+    resolution: tuple[int, int] | None = None   # For SET_RESOLUTION
+    fps: float | None = None                    # For SET_FPS
+    crop_region: tuple[int, int, int, int] | None = None  # For SET_CROP
+    duration_seconds: float | None = None       # Temporary duration
+    request_id: str | None = None               # Response correlation
+```
+
+---
+
+### LabelRequest
+
+Backend request for user to provide a label.
+
+> **ARCHITECTURAL INVARIANT:** Labels come from users, not assumptions. This is the ONLY way labels enter the system.
+
+```python
+class LabelTargetType(str, Enum):
+    """What kind of thing needs a label."""
+    
+    ENTITY = "entity"
+    LOCATION = "location"
+    EVENT = "event"
+    RELATION = "relation"
+
+
+class LabelConfidence(str, Enum):
+    """Confidence level triggering the request."""
+    
+    LOW = "low"        # Need user input
+    MEDIUM = "medium"  # Need confirmation
+    HIGH = "high"      # Informing user
+
+
+class LabelRequest(BaseModel):
+    """Backend request for user to provide a label."""
+    
+    request_id: str                             # Unique request ID
+    target_type: LabelTargetType                # Type of thing to label
+    target_id: str                              # ID of the target
+    confidence: LabelConfidence                 # Why we're asking
+    current_label: str | None = None            # Current best guess
+    alternative_labels: list[str] = []          # Other possibilities
+    thumbnail_base64: str | None = None         # Visual context
+    bounding_box: tuple[int, int, int, int] | None = None  # Bounding box
+    description: str = ""                       # Human-readable prompt
+    timeout_seconds: float = 30.0               # Response timeout
+```
+
+---
+
+### LabelResponse
+
+User's response to a label request.
+
+```python
+class LabelResponseType(str, Enum):
+    """How user responded to label request."""
+    
+    PROVIDED = "provided"      # User provided a label
+    CONFIRMED = "confirmed"    # User confirmed suggestion
+    REJECTED = "rejected"      # User rejected all suggestions
+    TIMEOUT = "timeout"        # No response in time
+    SKIPPED = "skipped"        # User explicitly skipped
+
+
+class LabelResponse(BaseModel):
+    """User's response to a label request."""
+    
+    request_id: str                     # Original request ID
+    response_type: LabelResponseType    # How user responded
+    label: str | None = None            # The label provided/confirmed
+    confidence: float = 1.0             # User's confidence [0, 1]
+    notes: str | None = None            # Optional user notes
+    response_time_ms: float | None = None  # Response time
+```
+
+---
+
+### ProtocolMessage
+
+Universal protocol message envelope.
+
+```python
+class ProtocolMessage(BaseModel):
+    """Universal protocol message envelope."""
+    
+    message_id: str                     # Unique message identifier
+    message_type: MessageType           # Type of message
+    timestamp: datetime                 # Creation timestamp
+    correlation_id: str | None = None   # Related message correlation
+    in_reply_to: str | None = None      # Reply-to message ID
+    payload: dict[str, Any] = {}        # Message payload
+    source: str = "unknown"             # Message source
+    
+    @classmethod
+    def create(
+        cls,
+        message_type: MessageType,
+        payload: BaseModel | dict[str, Any],
+        source: str = "backend",
+        correlation_id: str | None = None,
+        in_reply_to: str | None = None,
+    ) -> "ProtocolMessage":
+        """Create a new protocol message with auto-generated ID."""
+```
+
+**Usage:**
+
+```python
+# Create a label request message
+request = LabelRequest(
+    request_id="req-001",
+    target_type=LabelTargetType.ENTITY,
+    target_id="entity-abc",
+    confidence=LabelConfidence.LOW,
+    description="What is this object?"
+)
+
+message = ProtocolMessage.create(
+    message_type=MessageType.LABEL_REQUEST,
+    payload=request,
+    source="backend"
+)
+
+# Serialize for transmission
+json_str = message.model_dump_json()
+```
+
+---
+
+### EntityUpdate / LocationUpdate
+
+Backend updates about entities and locations for UI display.
+
+```python
+class EntityUpdate(BaseModel):
+    """Backend update about an entity's state."""
+    
+    entity_id: str                              # Unique entity ID
+    label: str = "unknown"                      # Current best label
+    labels: list[str] = []                      # All known labels/aliases
+    confidence: float = 0.0                     # Recognition confidence
+    visible: bool = True                        # Currently visible
+    state: str | None = None                    # Current state
+    relative_position: tuple[float, float, float] | None = None
+
+
+class LocationUpdate(BaseModel):
+    """Backend update about current location."""
+    
+    location_id: str                            # Unique location ID
+    label: str = "unknown"                      # Current best label
+    labels: list[str] = []                      # All known labels/aliases
+    confidence: float = 0.0                     # Recognition confidence
+    is_stable: bool = True                      # Location identity stable
+    uncertainty_reason: str | None = None       # Why uncertain
+```
+
+---
+
+### Handshake / ProtocolError
+
+Connection setup and error reporting.
+
+```python
+class Handshake(BaseModel):
+    """Connection handshake message."""
+    
+    protocol_version: str = "1.0.0"             # Semantic version
+    role: Literal["sensor", "backend"]          # Which end
+    identity: str = "unknown"                   # Human-readable ID
+    sent_at: datetime                           # For latency calc
+    session_id: str | None = None               # For session resume
+
+
+class ErrorSeverity(str, Enum):
+    """Error severity levels."""
+    
+    WARNING = "warning"
+    ERROR = "error"
+    CRITICAL = "critical"
+
+
+class ProtocolError(BaseModel):
+    """Error report message."""
+    
+    severity: ErrorSeverity                     # Error severity
+    code: str                                   # Error code
+    message: str                                # Human-readable message
+    related_message_id: str | None = None       # Related message
+    details: dict[str, Any] = {}                # Additional details
+    recoverable: bool = True                    # Can recover
+    suggested_action: str | None = None         # Recovery suggestion
 ```

@@ -1,12 +1,15 @@
 """Event resolver for state-change detection from deltas.
 
 Creates event candidates from detected deltas:
-- State changes: open/close, on/off
+- State changes
 - Appearance/disappearance events
 - Movement events
 
 Integrates with graph memory for event node persistence and
 dialog manager for event labeling when patterns are unknown.
+
+ARCHITECTURAL INVARIANT: No predefined semantic mappings.
+Event types are learned from user interaction, not hardcoded.
 """
 
 from __future__ import annotations
@@ -20,11 +23,23 @@ from episodic_agent.core.interfaces import EventResolver
 from episodic_agent.modules.delta_detector import DeltaDetector
 from episodic_agent.schemas.events import (
     Delta,
-    DeltaType,
     EventCandidate,
-    EventType,
+    DELTA_TYPE_NEW,
+    DELTA_TYPE_MISSING,
+    DELTA_TYPE_MOVED,
+    DELTA_TYPE_CHANGED,
+    EVENT_TYPE_UNKNOWN,
 )
-from episodic_agent.schemas.graph import EdgeType, GraphEdge, GraphNode, NodeType
+from episodic_agent.schemas.graph import (
+    GraphEdge, 
+    GraphNode, 
+    NODE_TYPE_EVENT,
+    NODE_TYPE_ENTITY,
+    EDGE_TYPE_IN_EVENT,
+    EDGE_TYPE_OCCURRED_IN,
+    EDGE_TYPE_TRIGGERED_BY,
+    EDGE_TYPE_INVOLVES,
+)
 from episodic_agent.utils.config import (
     CONFIDENCE_T_HIGH,
     DEFAULT_EMBEDDING_DIM,
@@ -40,18 +55,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# State transition patterns -> event type mapping
-STATE_TRANSITION_MAP: dict[tuple[str, str], EventType] = {
-    # Drawer/Door states
-    ("closed", "open"): EventType.OPENED,
-    ("open", "closed"): EventType.CLOSED,
-    # Light/Switch states
-    ("off", "on"): EventType.TURNED_ON,
-    ("on", "off"): EventType.TURNED_OFF,
-    # Generic boolean states
-    ("false", "true"): EventType.TURNED_ON,
-    ("true", "false"): EventType.TURNED_OFF,
-}
+# =============================================================================
+# ARCHITECTURAL INVARIANT: No predefined state-to-event mappings
+# =============================================================================
+# 
+# REMOVED: STATE_TRANSITION_MAP that mapped state changes to event types.
+# All event semantics are now LEARNED from user interaction.
+# 
+# Instead of hardcoding "closed -> open = OPENED", the system:
+#   1. Detects the structural change (state changed from X to Y)
+#   2. Creates an unknown event candidate
+#   3. Asks user to label it (or matches against learned patterns)
+#   4. Stores the learned pattern for future recognition
+# =============================================================================
 
 
 class EventResolverStateChange(EventResolver):
@@ -153,13 +169,14 @@ class EventResolverStateChange(EventResolver):
         Returns:
             EventCandidate if this delta represents a recognizable event.
         """
-        if delta.delta_type == DeltaType.STATE_CHANGED:
+        # Use string comparisons instead of enum values
+        if delta.delta_type == DELTA_TYPE_CHANGED:
             return self._handle_state_change(delta, acf)
-        elif delta.delta_type == DeltaType.NEW_ENTITY:
+        elif delta.delta_type == DELTA_TYPE_NEW:
             return self._handle_appearance(delta, acf)
-        elif delta.delta_type == DeltaType.MISSING_ENTITY:
+        elif delta.delta_type == DELTA_TYPE_MISSING:
             return self._handle_disappearance(delta, acf)
-        elif delta.delta_type == DeltaType.MOVED_ENTITY:
+        elif delta.delta_type == DELTA_TYPE_MOVED:
             return self._handle_movement(delta, acf)
         
         return None
@@ -185,29 +202,28 @@ class EventResolverStateChange(EventResolver):
         pre_state = delta.pre_state.lower()
         post_state = delta.post_state.lower()
         
-        # Build state signature
-        category = delta.entity_category or "unknown"
-        pre_signature = f"{category}:{pre_state}"
-        post_signature = f"{category}:{post_state}"
+        # Build state signature (structural, not semantic)
+        # REMOVED: entity_category from signature - backend learns semantics
+        pre_signature = f"state:{pre_state}"
+        post_signature = f"state:{post_state}"
         pattern_signature = f"{pre_signature}->{post_signature}"
         
-        # Determine event type from transition
-        event_type = STATE_TRANSITION_MAP.get(
-            (pre_state, post_state),
-            EventType.STATE_CHANGE,
-        )
+        # REMOVED: STATE_TRANSITION_MAP lookup
+        # Event types are now LEARNED from user interaction, not predefined
+        # Start with unknown type - will be labeled by user or matched to learned patterns
+        event_type = EVENT_TYPE_UNKNOWN
         
-        # Check if we've seen this pattern before
+        # Check if we've seen this pattern before (learned from user)
         known_event_node = self._find_known_event(pattern_signature)
         
         if known_event_node:
-            # Recognized event
+            # Recognized event - use learned label
             return self._create_recognized_event(
                 delta, event_type, known_event_node,
                 pre_signature, post_signature, pattern_signature
             )
         else:
-            # New event pattern
+            # New event pattern - will prompt user for label
             return self._create_new_event(
                 delta, event_type, acf,
                 pre_signature, post_signature, pattern_signature
@@ -227,15 +243,15 @@ class EventResolverStateChange(EventResolver):
         Returns:
             Event candidate for appearance.
         """
-        category = delta.entity_category or "unknown"
-        pattern_signature = f"{category}:appeared"
+        # REMOVED: entity_category - backend learns semantics from user
+        pattern_signature = "entity:appeared"
         
-        # Generate label
-        label = f"{delta.entity_label or category}_appeared"
+        # Generate structural label - user will provide semantic label
+        label = f"{delta.entity_label or 'entity'}_appeared" if delta.entity_label else "unknown_appeared"
         
         event = EventCandidate(
             event_id=f"evt_{uuid.uuid4().hex[:12]}",
-            event_type=EventType.APPEARED,
+            event_type="appeared",  # Structural type, user may relabel
             label=label,
             involved_entity_ids=[delta.entity_id] if delta.entity_id else [],
             involved_entity_labels=[delta.entity_label] if delta.entity_label else [],
@@ -266,14 +282,14 @@ class EventResolverStateChange(EventResolver):
         Returns:
             Event candidate for disappearance.
         """
-        category = delta.entity_category or "unknown"
-        pattern_signature = f"{category}:disappeared"
+        # REMOVED: entity_category - backend learns semantics from user
+        pattern_signature = "entity:disappeared"
         
-        label = f"{delta.entity_label or category}_disappeared"
+        label = f"{delta.entity_label or 'entity'}_disappeared" if delta.entity_label else "unknown_disappeared"
         
         event = EventCandidate(
             event_id=f"evt_{uuid.uuid4().hex[:12]}",
-            event_type=EventType.DISAPPEARED,
+            event_type="disappeared",  # Structural type, user may relabel
             label=label,
             involved_entity_ids=[delta.entity_id] if delta.entity_id else [],
             involved_entity_labels=[delta.entity_label] if delta.entity_label else [],
@@ -304,12 +320,12 @@ class EventResolverStateChange(EventResolver):
         Returns:
             Event candidate for movement.
         """
-        category = delta.entity_category or "unknown"
-        label = f"{delta.entity_label or category}_moved"
+        # REMOVED: entity_category - backend learns semantics from user
+        label = f"{delta.entity_label or 'entity'}_moved" if delta.entity_label else "unknown_moved"
         
         event = EventCandidate(
             event_id=f"evt_{uuid.uuid4().hex[:12]}",
-            event_type=EventType.MOVED,
+            event_type="moved",  # Structural type, user may relabel
             label=label,
             involved_entity_ids=[delta.entity_id] if delta.entity_id else [],
             involved_entity_labels=[delta.entity_label] if delta.entity_label else [],
@@ -347,7 +363,7 @@ class EventResolverStateChange(EventResolver):
             return self._graph_store.get_node(node_id)
         
         # Search graph store for event nodes with this signature
-        event_nodes = self._graph_store.get_nodes_by_type(NodeType.EVENT)
+        event_nodes = self._graph_store.get_nodes_by_type(NODE_TYPE_EVENT)
         
         for node in event_nodes:
             node_signature = node.extras.get("pattern_signature")
@@ -440,19 +456,13 @@ class EventResolverStateChange(EventResolver):
         Returns:
             Event candidate with generated or user-provided label.
         """
-        # Generate default label from event type and entity
-        entity_part = delta.entity_label or delta.entity_category or "entity"
+        # Generate default label from entity (no predefined event type mapping)
+        # REMOVED: EventType enum comparisons - all labels are learned
+        entity_part = delta.entity_label or "entity"
         
-        if event_type == EventType.OPENED:
-            default_label = f"{entity_part}_opened"
-        elif event_type == EventType.CLOSED:
-            default_label = f"{entity_part}_closed"
-        elif event_type == EventType.TURNED_ON:
-            default_label = f"{entity_part}_turned_on"
-        elif event_type == EventType.TURNED_OFF:
-            default_label = f"{entity_part}_turned_off"
-        else:
-            default_label = f"{entity_part}_state_change"
+        # Create structural label based on state transition
+        # Semantic meaning will be learned from user interaction
+        default_label = f"{entity_part}_{delta.pre_state}_to_{delta.post_state}"
         
         # Ask user for label if enabled
         if self._prompt_for_unknown_events and not self._auto_label_events:
@@ -463,7 +473,7 @@ class EventResolverStateChange(EventResolver):
             
             suggestions = [
                 default_label,
-                f"{event_type.value}_{entity_part}",
+                f"{delta.pre_state}_to_{delta.post_state}",
                 pattern_signature.replace("->", "_to_"),
             ]
             
@@ -539,18 +549,18 @@ class EventResolverStateChange(EventResolver):
         """
         node = GraphNode(
             node_id=f"event_{uuid.uuid4().hex[:12]}",
-            node_type=NodeType.EVENT,
+            node_type=NODE_TYPE_EVENT,
             label=label,
             confidence=CONFIDENCE_T_HIGH,
             created_at=datetime.now(),
             last_accessed=datetime.now(),
             access_count=1,
             extras={
-                "event_type": event_type.value,
+                "event_type": event_type,  # Now a string, not enum
                 "pre_signature": pre_signature,
                 "post_signature": post_signature,
                 "pattern_signature": pattern_signature,
-                "entity_category": delta.entity_category,
+                # REMOVED: entity_category - backend learns semantics from user
                 "source": "state_change_resolver",
             },
         )
@@ -561,12 +571,12 @@ class EventResolverStateChange(EventResolver):
         # Create "involves" edge if we have entity info
         if delta.entity_id:
             # Find entity node
-            entity_nodes = self._graph_store.get_nodes_by_type(NodeType.ENTITY)
+            entity_nodes = self._graph_store.get_nodes_by_type(NODE_TYPE_ENTITY)
             for entity_node in entity_nodes:
                 if entity_node.source_id == delta.entity_id:
                     edge = GraphEdge(
                         edge_id=f"edge_{uuid.uuid4().hex[:12]}",
-                        edge_type=EdgeType.INVOLVES,
+                        edge_type=EDGE_TYPE_INVOLVES,
                         source_node_id=node.node_id,
                         target_node_id=entity_node.node_id,
                         weight=1.0,
@@ -582,11 +592,11 @@ class EventResolverStateChange(EventResolver):
         """Convert a delta to a dictionary for storage."""
         return {
             "delta_id": delta.delta_id,
-            "delta_type": delta.delta_type.value,
+            "delta_type": delta.delta_type,  # Now a string, not enum
             "timestamp": delta.timestamp.isoformat(),
             "entity_id": delta.entity_id,
             "entity_label": delta.entity_label,
-            "entity_category": delta.entity_category,
+            # REMOVED: entity_category - backend learns semantics from user
             "pre_state": delta.pre_state,
             "post_state": delta.post_state,
             "pre_position": delta.pre_position,

@@ -40,7 +40,7 @@ BOUNDARY_TIMEOUT_FRAMES: int = 200
 MAX_LABELS_PER_NODE: int = 10
 
 # =============================================================================
-# Delta Detection (Phase 5)
+# Delta Detection - State change tracking
 # =============================================================================
 
 # Movement threshold in units for detecting entity movement
@@ -50,7 +50,7 @@ DEFAULT_MOVE_THRESHOLD: float = 0.5
 DEFAULT_MISSING_WINDOW: int = 3
 
 # =============================================================================
-# Event Detection (Phase 5)
+# Event Detection - Pattern recognition from deltas
 # =============================================================================
 
 # Confidence threshold for event recognition

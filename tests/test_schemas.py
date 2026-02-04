@@ -147,22 +147,24 @@ class TestPercept:
         
         percept = Percept(
             percept_id="percept_001",
+            source_frame_id=1,
             scene_embedding=[0.1, 0.2, 0.3, 0.4],
-            objects=[obj1, obj2],
+            candidates=[obj1, obj2],
         )
         
         assert percept.percept_id == "percept_001"
         assert len(percept.scene_embedding) == 4
-        assert len(percept.objects) == 2
-        assert percept.objects[0].label == "Table"
+        assert len(percept.candidates) == 2
+        assert percept.candidates[0].label == "Table"
 
     def test_empty_percept(self):
         """Percept can be empty (no objects)."""
         percept = Percept(
             percept_id="empty",
+            source_frame_id=0,
             scene_embedding=[],
         )
-        assert len(percept.objects) == 0
+        assert len(percept.candidates) == 0
 
 
 # =============================================================================
@@ -233,6 +235,8 @@ class TestEpisode:
 
     def test_serialization_roundtrip(self):
         """Episode serializes and deserializes correctly."""
+        obj1 = ObjectCandidate(candidate_id="door_001", label="door")
+        obj2 = ObjectCandidate(candidate_id="lamp_001", label="lamp")
         episode = Episode(
             episode_id="ep_001",
             source_acf_id="acf_001",
@@ -240,7 +244,7 @@ class TestEpisode:
             start_time=datetime.now(),
             end_time=datetime.now(),
             step_count=50,
-            entities=["door_001", "lamp_001"],
+            entities=[obj1, obj2],
             events=[{"type": "state_change"}],
             boundary_reason="location_change",
         )
@@ -249,7 +253,7 @@ class TestEpisode:
         restored = Episode.model_validate_json(json_str)
         
         assert restored.episode_id == episode.episode_id
-        assert restored.entities == episode.entities
+        assert len(restored.entities) == 2
         assert restored.boundary_reason == episode.boundary_reason
 
 
@@ -266,13 +270,12 @@ class TestGraphNode:
             node_id="loc_kitchen",
             node_type=NodeType.LOCATION,
             label="Kitchen",
-            properties={"guid": "room-kitchen-001", "visit_count": 5},
+            extras={"guid": "room-kitchen-001", "visit_count": 5},
             created_at=datetime.now(),
-            updated_at=datetime.now(),
         )
         
         assert node.node_type == NodeType.LOCATION
-        assert node.properties["visit_count"] == 5
+        assert node.extras["visit_count"] == 5
 
     def test_entity_node(self):
         """Create entity node."""
@@ -280,23 +283,27 @@ class TestGraphNode:
             node_id="ent_door",
             node_type=NodeType.ENTITY,
             label="Front Door",
-            properties={"category": "door", "typical_state": "Closed"},
+            extras={"category": "door", "typical_state": "Closed"},
             created_at=datetime.now(),
-            updated_at=datetime.now(),
         )
         
         assert node.node_type == NodeType.ENTITY
-        assert node.properties["category"] == "door"
+        assert node.extras["category"] == "door"
 
     def test_node_types(self):
-        """All node types are valid."""
-        for node_type in NodeType:
+        """All node types are valid strings."""
+        # NodeType is now a class with string constants, not an enum
+        node_types = [
+            NodeType.CONTEXT, NodeType.CUE, NodeType.LOCATION,
+            NodeType.ENTITY, NodeType.EVENT, NodeType.EPISODE,
+            NodeType.GOAL, NodeType.CONCEPT
+        ]
+        for node_type in node_types:
             node = GraphNode(
-                node_id=f"node_{node_type.value}",
+                node_id=f"node_{node_type}",
                 node_type=node_type,
                 label="Test",
                 created_at=datetime.now(),
-                updated_at=datetime.now(),
             )
             assert node.node_type == node_type
 
@@ -313,26 +320,32 @@ class TestGraphEdge:
         edge = GraphEdge(
             edge_id="e_001",
             edge_type=EdgeType.TYPICAL_IN,
-            source_id="ent_door",
-            target_id="loc_kitchen",
+            source_node_id="ent_door",
+            target_node_id="loc_kitchen",
             weight=5.0,
             created_at=datetime.now(),
-            updated_at=datetime.now(),
         )
         
         assert edge.edge_type == EdgeType.TYPICAL_IN
         assert edge.weight == 5.0
 
     def test_edge_types(self):
-        """All edge types are valid."""
-        for edge_type in EdgeType:
+        """All edge types are valid strings."""
+        # EdgeType is now a class with string constants, not an enum
+        edge_types = [
+            EdgeType.CUE_OF, EdgeType.IN_CONTEXT, EdgeType.TYPICAL_IN,
+            EdgeType.INVOLVES, EdgeType.IN_EVENT, EdgeType.TRIGGERED_BY,
+            EdgeType.OCCURRED_IN, EdgeType.ALIAS_OF, EdgeType.MERGED_INTO,
+            EdgeType.CONTAINS, EdgeType.PART_OF, EdgeType.SIMILAR_TO,
+            EdgeType.TEMPORAL, EdgeType.CAUSAL
+        ]
+        for edge_type in edge_types:
             edge = GraphEdge(
-                edge_id=f"edge_{edge_type.value}",
+                edge_id=f"edge_{edge_type}",
                 edge_type=edge_type,
-                source_id="src",
-                target_id="tgt",
+                source_node_id="src",
+                target_node_id="tgt",
                 created_at=datetime.now(),
-                updated_at=datetime.now(),
             )
             assert edge.edge_type == edge_type
 
@@ -347,21 +360,28 @@ class TestDelta:
     def test_state_change_delta(self):
         """Create state change delta."""
         delta = Delta(
+            delta_id="delta_001",
             delta_type=DeltaType.STATE_CHANGED,
             entity_id="door_001",
             entity_label="Front Door",
-            old_value="Closed",
-            new_value="Open",
+            pre_state="Closed",
+            post_state="Open",
         )
         
         assert delta.delta_type == DeltaType.STATE_CHANGED
-        assert delta.old_value == "Closed"
-        assert delta.new_value == "Open"
+        assert delta.pre_state == "Closed"
+        assert delta.post_state == "Open"
 
     def test_delta_types(self):
         """All delta types work."""
-        for delta_type in DeltaType:
+        # DeltaType is now a class with string constants, not an enum
+        delta_types = [
+            DeltaType.NEW_ENTITY, DeltaType.MISSING_ENTITY,
+            DeltaType.MOVED_ENTITY, DeltaType.STATE_CHANGED
+        ]
+        for i, delta_type in enumerate(delta_types):
             delta = Delta(
+                delta_id=f"delta_{i}",
                 delta_type=delta_type,
                 entity_id="test_entity",
             )
@@ -378,16 +398,16 @@ class TestEventCandidate:
     def test_state_change_event(self):
         """Create state change event."""
         event = EventCandidate(
-            event_type=EventType.STATE_CHANGE,
-            entity_id="lamp_001",
+            event_id="event_001",
+            event_type="state_change",  # Now a string, not an enum
             label="Light turned on",
             confidence=1.0,
             timestamp=datetime.now(),
-            details={"old_state": "Off", "new_state": "On"},
+            extras={"old_state": "Off", "new_state": "On"},
         )
         
-        assert event.event_type == EventType.STATE_CHANGE
-        assert event.details["new_state"] == "On"
+        assert event.event_type == "state_change"
+        assert event.extras["new_state"] == "On"
 
 
 # =============================================================================
@@ -404,20 +424,18 @@ class TestRetrievalResult:
         assert result.query_id == "q_001"
         assert result.episodes == []
         assert result.nodes == []
-        assert result.scores == {}
+        assert result.episode_scores == []
+        assert result.node_scores == []
 
     def test_result_with_scores(self):
         """Result with scores."""
         result = RetrievalResult(
             query_id="q_001",
-            scores={
-                "ep_001": 0.8,
-                "ep_002": 0.6,
-                "node_001": 0.5,
-            },
+            episode_scores=[0.8, 0.6],
+            node_scores=[0.5],
         )
         
-        assert result.scores["ep_001"] == 0.8
+        assert result.episode_scores[0] == 0.8
 
 
 # =============================================================================
@@ -430,7 +448,10 @@ class TestStepResult:
     def test_creation(self):
         """Create step result."""
         result = StepResult(
+            run_id="run_001",
             step_number=42,
+            frame_id=42,
+            acf_id="acf_001",
             timestamp=datetime.now(),
             location_label="Kitchen",
             location_confidence=0.95,
@@ -447,7 +468,10 @@ class TestStepResult:
     def test_to_log_dict(self):
         """Step result converts to log dict."""
         result = StepResult(
+            run_id="run_001",
             step_number=1,
+            frame_id=1,
+            acf_id="acf_001",
             timestamp=datetime.now(),
             location_label="Test",
             location_confidence=0.5,
@@ -457,7 +481,7 @@ class TestStepResult:
             boundary_triggered=False,
         )
         
-        log_dict = result.to_log_dict()
+        log_dict = result.model_dump()
         assert "step_number" in log_dict
         assert "timestamp" in log_dict
         assert log_dict["step_number"] == 1

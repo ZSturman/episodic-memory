@@ -193,7 +193,7 @@ def run(
         "stub",
         "--profile",
         "-p",
-        help="Module profile to use (stub, unity_cheat)",
+        help="Module profile to use (stub, unity_cheat, unity_full)",
     ),
     unity_ws: Optional[str] = typer.Option(
         None,
@@ -211,6 +211,11 @@ def run(
         "-v",
         help="Enable verbose logging",
     ),
+    log_sensor_data: bool = typer.Option(
+        False,
+        "--log-sensor-data",
+        help="Log raw sensor data for debugging Unity communication",
+    ),
 ) -> None:
     """Run the episodic memory agent loop.
     
@@ -219,13 +224,32 @@ def run(
     
     Examples:
     
-        # Run with stub modules (Phase 1 testing)
+        # Run with simulated sensors for testing
         python -m episodic_agent.cli run --profile stub --steps 200
         
-        # Run with Unity integration
+        # Run with Unity live sensor stream  
         python -m episodic_agent.cli run --profile unity_cheat --unity-ws ws://localhost:8765 --fps 10
+        
+        # Debug Unity communication with sensor data logging
+        python -m episodic_agent.cli run --profile unity_full --unity-ws ws://localhost:8765 --log-sensor-data -v
     """
     setup_logging(verbose)
+    
+    # Enable sensor data logging if requested
+    if log_sensor_data:
+        import logging as log_module
+        data_logger = log_module.getLogger("episodic_agent.modules.unity.sensor_provider.data")
+        data_logger.setLevel(log_module.DEBUG)
+        # Add a handler if none exists
+        if not data_logger.handlers:
+            handler = log_module.StreamHandler()
+            handler.setFormatter(log_module.Formatter(
+                "%(asctime)s [DATA] %(message)s",
+                datefmt="%H:%M:%S",
+            ))
+            data_logger.addHandler(handler)
+            data_logger.propagate = False
+        typer.echo("📡 Sensor data logging enabled - raw Unity↔Python communication will be logged")
     
     # Generate run ID from timestamp
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -246,6 +270,7 @@ def run(
     # Build parameter overrides
     overrides = {
         "freeze_interval": freeze_interval,
+        "log_raw_data": log_sensor_data,  # Pass to sensor provider
     }
     if unity_ws:
         overrides["ws_url"] = unity_ws
@@ -286,9 +311,9 @@ def run(
     
     # Print header
     if not quiet:
-        typer.echo(f"Episodic Memory Agent - Phase 5")
+        typer.echo(f"Episodic Memory Agent")
+        typer.echo(f"Mode: {profile_config.description}")
         typer.echo(f"Run ID: {run_id}")
-        typer.echo(f"Profile: {profile_config.name} - {profile_config.description}")
         if is_unity:
             ws_url = overrides.get("ws_url") or profile_config.parameters.get("ws_url")
             typer.echo(f"Unity WS: {ws_url}")
@@ -329,7 +354,7 @@ def run(
                             else:
                                 conn_state = "unknown"
                             
-                            # Get recent events and deltas from ACF (Phase 5)
+                            # Get recent events and deltas from ACF for display
                             recent_events = []
                             recent_deltas = []
                             event_count = 0
@@ -411,6 +436,35 @@ def run(
         typer.echo(f"Episodes frozen: {orchestrator.episode_count}")
         typer.echo(f"Log written to: {log_path}")
         
+        # Show sensor/validation stats for Unity mode
+        if is_unity:
+            sensor = modules.get("sensor")
+            if hasattr(sensor, "get_status"):
+                status = sensor.get_status()
+                typer.echo("")
+                typer.echo("📡 Sensor Connection Stats:")
+                typer.echo(f"  Final state: {status.get('state', 'unknown')}")
+                typer.echo(f"  Frames dropped: {status.get('dropped_frames', 0)}")
+                typer.echo(f"  Validation errors: {status.get('validation_errors', 0)}")
+                typer.echo(f"  Reconnects: {status.get('reconnect_count', 0)}")
+                
+                # Show gateway stats if available
+                if status.get('gateway_stats'):
+                    gw = status['gateway_stats']
+                    typer.echo(f"  Gateway messages: {gw.get('total_messages', 0)}")
+                    typer.echo(f"  Gateway error rate: {gw.get('error_rate', 0):.1%}")
+            
+            # Show recent validation errors if any
+            if hasattr(sensor, "get_recent_errors"):
+                errors = sensor.get_recent_errors(5)
+                if errors:
+                    typer.echo("")
+                    typer.echo("⚠️ Recent Validation Errors:")
+                    for err in errors:
+                        typer.echo(f"  [{err['severity']}] {err['code']}: {err['message']}")
+                        if err.get('suggestion'):
+                            typer.echo(f"    → {err['suggestion']}")
+        
         # Show learned locations/entities for Unity mode
         if is_unity:
             graph_store = modules.get("graph_store")
@@ -421,28 +475,30 @@ def run(
                 entities = graph_store.get_nodes_by_type(NodeType.ENTITY)
                 events = graph_store.get_nodes_by_type(NodeType.EVENT)
                 
-                typer.echo(f"Learned locations: {len(locations)}")
+                typer.echo("")
+                typer.echo("📍 Learned Locations:")
+                typer.echo(f"  Count: {len(locations)}")
                 for loc in locations:
                     typer.echo(f"  - {loc.label} (visits: {loc.access_count})")
                 
                 typer.echo(f"Learned entities: {len(entities)}")
                 
-                # Show learned events (Phase 5)
+                # Show learned events
                 typer.echo(f"Learned event patterns: {len(events)}")
                 for evt in events:
                     pattern = evt.extras.get("pattern_signature", "?")
                     typer.echo(f"  - {evt.label} [{pattern}]")
             
-            # Show event resolver stats (Phase 5)
+            # Show event resolver stats
             event_resolver = modules.get("event_resolver")
             if hasattr(event_resolver, "events_detected"):
                 typer.echo("")
-                typer.echo("Phase 5 Statistics:")
-                typer.echo(f"  Deltas detected: {event_resolver.deltas_detected}")
-                typer.echo(f"  Events detected: {event_resolver.events_detected}")
-                typer.echo(f"  Events labeled: {event_resolver.events_labeled}")
-                typer.echo(f"  Events recognized: {event_resolver.events_recognized}")
-                typer.echo(f"  Questions asked: {event_resolver.questions_asked}")
+                typer.echo("Event Detection Statistics:")
+                typer.echo(f"  State changes detected: {event_resolver.deltas_detected}")
+                typer.echo(f"  Events recognized: {event_resolver.events_detected}")
+                typer.echo(f"  Events labeled by user: {event_resolver.events_labeled}")
+                typer.echo(f"  Events matched to patterns: {event_resolver.events_recognized}")
+                typer.echo(f"  User prompts issued: {event_resolver.questions_asked}")
 
 
 @app.command()

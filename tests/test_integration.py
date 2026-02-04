@@ -51,7 +51,7 @@ class TestStubProfileIntegration:
     def orchestrator(self, temp_run_dir):
         """Create orchestrator with persistent stores."""
         return AgentOrchestrator(
-            sensor=StubSensorProvider(step_limit=100),
+            sensor=StubSensorProvider(max_frames=100),
             perception=StubPerception(),
             acf_builder=StubACFBuilder(),
             location_resolver=StubLocationResolver(),
@@ -102,7 +102,10 @@ class TestStubProfileIntegration:
             
             for i in range(5):
                 result = StepResult(
+                    run_id="test_log_writer",
                     step_number=i + 1,
+                    frame_id=i + 1,
+                    acf_id=f"acf_{i + 1}",
                     timestamp=datetime.now(),
                     location_label="TestRoom",
                     location_confidence=0.9,
@@ -194,7 +197,8 @@ class TestProfileSystem:
         profiles = list_profiles()
         
         assert len(profiles) >= 3
-        assert any(p.name == "stub" for p in profiles)
+        # list_profiles returns list of (name, description) tuples
+        assert any(p[0] == "stub" for p in profiles)
 
 
 # =============================================================================

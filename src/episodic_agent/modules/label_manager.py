@@ -80,13 +80,16 @@ class LabelManager:
         
         if conflicting_nodes:
             # Create a conflict
+            # node_type is now a string, not enum with .value
+            existing_type = conflicting_nodes[0].node_type
+            new_type = node.node_type
             conflict = LabelConflict(
                 conflict_id=f"conflict_{uuid.uuid4().hex[:12]}",
                 label=label,
                 existing_node_id=conflicting_nodes[0].node_id,
                 new_node_id=node_id,
-                existing_node_type=conflicting_nodes[0].node_type.value,
-                new_node_type=node.node_type.value,
+                existing_node_type=existing_type if isinstance(existing_type, str) else str(existing_type),
+                new_node_type=new_type if isinstance(new_type, str) else str(new_type),
             )
             self._pending_conflicts[conflict.conflict_id] = conflict
             return (False, conflict)
@@ -161,10 +164,13 @@ class LabelManager:
             f"Rename: choose a new label for one",
         ]
         
+        # node_type is now a string, not enum with .value
+        existing_type = existing_node.node_type if isinstance(existing_node.node_type, str) else str(existing_node.node_type)
+        new_type = new_node.node_type if isinstance(new_node.node_type, str) else str(new_node.node_type)
         prompt = (
             f"Label conflict: '{conflict.label}' already exists.\n"
-            f"  Existing: {existing_node.node_type.value} '{existing_node.label}' ({existing_node.node_id})\n"
-            f"  New: {new_node.node_type.value} '{new_node.label}' ({new_node.node_id})\n"
+            f"  Existing: {existing_type} '{existing_node.label}' ({existing_node.node_id})\n"
+            f"  New: {new_type} '{new_node.label}' ({new_node.node_id})\n"
             "How should this be resolved?"
         )
         
@@ -216,12 +222,15 @@ class LabelManager:
         elif choice == 1:
             # DISAMBIGUATE: add sublabels
             # Ask for sublabels
+            # node_type is now a string, not enum with .value
+            existing_type = existing_node.node_type if isinstance(existing_node.node_type, str) else str(existing_node.node_type)
+            new_type = new_node.node_type if isinstance(new_node.node_type, str) else str(new_node.node_type)
             existing_sublabel = self._dialog_manager.request_label(
-                f"Enter sublabel for existing '{conflict.label}' ({existing_node.node_type.value}):",
+                f"Enter sublabel for existing '{conflict.label}' ({existing_type}):",
                 [f"{conflict.label}_1", f"{conflict.label}_existing"],
             )
             new_sublabel = self._dialog_manager.request_label(
-                f"Enter sublabel for new '{conflict.label}' ({new_node.node_type.value}):",
+                f"Enter sublabel for new '{conflict.label}' ({new_type}):",
                 [f"{conflict.label}_2", f"{conflict.label}_new"],
             )
             

@@ -9,6 +9,9 @@ namespace EpisodicAgent.Core
     /// <summary>
     /// Streams sensor frames to connected Python clients at a configurable rate.
     /// Collects data from RoomVolumes, EntityMarkers, and InteractableStates.
+    /// 
+    /// ARCHITECTURAL INVARIANT: All positions are agent-relative.
+    /// No absolute world coordinates cross the wire.
     /// </summary>
     public class SensorStreamer : MonoBehaviour
     {
@@ -111,7 +114,7 @@ namespace EpisodicAgent.Core
                 frame_id = _frameId,
                 camera = BuildCameraPose(),
                 current_room_guid = GetCurrentRoomGuid(),
-                current_room_label = GetCurrentRoomLabel(),
+                // REMOVED: current_room_label - backend owns all semantic labeling
                 entities = BuildEntityList(),
                 state_changes = new List<StateChangeEvent>(_pendingStateChanges)
             };
@@ -125,6 +128,8 @@ namespace EpisodicAgent.Core
             {
                 return new CameraPose
                 {
+                    // ARCHITECTURAL INVARIANT: Positions are agent-relative
+                    // With no player, position is origin (self-relative = 0,0,0)
                     position = new Vector3Data(Vector3.zero),
                     forward = new Vector3Data(Vector3.forward),
                     up = new Vector3Data(Vector3.up),
@@ -134,9 +139,12 @@ namespace EpisodicAgent.Core
             }
 
             Vector3 euler = playerCamera.eulerAngles;
+            
+            // ARCHITECTURAL INVARIANT: Camera pose is always at relative origin
+            // The agent IS the origin of the coordinate system
             return new CameraPose
             {
-                position = new Vector3Data(playerCamera.position),
+                position = new Vector3Data(Vector3.zero),  // Agent is always at origin
                 forward = new Vector3Data(playerCamera.forward),
                 up = new Vector3Data(playerCamera.up),
                 yaw = euler.y,
@@ -151,18 +159,18 @@ namespace EpisodicAgent.Core
             return room != null ? room.Guid : "";
         }
 
-        private string GetCurrentRoomLabel()
-        {
-            if (worldManager == null) return "unknown";
-            var room = worldManager.CurrentRoom;
-            return room != null ? room.Label : "unknown";
-        }
+        // REMOVED: GetCurrentRoomLabel() - backend owns all semantic labeling
+        // Room names are learned from user interaction, not sent from Unity.
 
         private List<EntityData> BuildEntityList()
         {
             var entities = new List<EntityData>();
 
             if (worldManager == null) return entities;
+
+            // Get agent position for relative coordinate calculation
+            Vector3 agentPosition = playerCamera != null ? playerCamera.position : Vector3.zero;
+            Vector3 agentForward = playerCamera != null ? playerCamera.forward : Vector3.forward;
 
             foreach (var marker in worldManager.Entities)
             {
@@ -173,16 +181,21 @@ namespace EpisodicAgent.Core
                 if (!includeAllEntities && !isVisible)
                     continue;
 
+                // ARCHITECTURAL INVARIANT: All positions are agent-relative
+                // Transform world position to agent-relative coordinates
+                Vector3 worldPos = marker.transform.position;
+                Vector3 relativePos = worldPos - agentPosition;
+                
+                // Compute distance (always positive)
+                float distance = relativePos.magnitude;
+
                 var entityData = new EntityData
                 {
                     guid = marker.Guid,
-                    label = marker.Label,
-                    category = marker.Category,
-                    position = new Vector3Data(marker.transform.position),
+                    // REMOVED: label and category - backend owns all semantic labeling
+                    position = new Vector3Data(relativePos),  // Agent-relative position
                     size = new Vector3Data(GetEntitySize(marker)),
-                    distance = playerCamera != null 
-                        ? Vector3.Distance(playerCamera.position, marker.transform.position) 
-                        : 0f,
+                    distance = distance,
                     is_visible = isVisible,
                     interactable_type = GetInteractableType(marker),
                     interactable_state = GetInteractableState(marker)

@@ -1,6 +1,10 @@
 # Unity Setup Guide
-u
+
 This guide provides complete instructions for setting up the Unity sensor simulator to work with the Episodic Memory Agent. Even if you've never used Unity before, these steps will get you running.
+
+> **ARCHITECTURAL INVARIANT:** Unity is a stateless sensor. All labels, knowledge, and reasoning happen in the Python backend. Do NOT set semantic labels in Unity - they will be learned from user interaction.
+
+> **See Also:** [CAMERAS.md](CAMERAS.md) | [UI.md](UI.md) | [PROTOCOL.md](PROTOCOL.md)
 
 ## Prerequisites
 
@@ -110,7 +114,7 @@ Create at least two rooms for testing:
    - Set **Size** to `(10, 4, 10)` (10x4x10 meters)
    - Set **Center** to `(0, 2, 0)`
 4. Add component: `RoomVolume`
-   - Set **Label** to `Living Room`
+   - Leave **Label** empty (backend learns labels from user)
    - GUID will auto-generate
 
 #### Room 2: Kitchen
@@ -123,7 +127,7 @@ Create at least two rooms for testing:
    - Set **Size** to `(8, 4, 8)`
    - Set **Center** to `(0, 2, 0)`
 5. Add component: `RoomVolume`
-   - Set **Label** to `Kitchen`
+   - Leave **Label** empty (backend learns labels from user)
 
 ### 3.7 Create Visual Environment (Recommended)
 
@@ -309,9 +313,8 @@ Common categories used by the agent:
    - **Scale**: `(0.1, 2, 1)` - thin, door-sized
 4. Add component: `EntityMarker`
    - Click **Add Component** → search "EntityMarker"
-   - Set **Label** to `Hallway Door`
-   - Set **Category** to `door`
-   - **GUID** will auto-generate (leave empty)
+   - Leave **Label** empty (backend learns from user)
+   - **GUID** will auto-generate
 5. Add component: `InteractableState`
    - Click **Add Component** → search "InteractableState"
    - Set **State Type** to `OpenClosed`
@@ -327,8 +330,8 @@ Common categories used by the agent:
    - **Position**: `(-3, 0.5, 3)` - corner of living room
    - **Scale**: `(0.3, 0.5, 0.3)` - small table lamp size
 4. Add component: `EntityMarker`
-   - Set **Label** to `Table Lamp`
-   - Set **Category** to `light`
+   - Leave **Label** empty (backend learns from user)
+   - **GUID** will auto-generate
 5. Add component: `InteractableState`
    - Set **State Type** to `OnOff`
    - Set **Initial State** to `off`
@@ -345,8 +348,8 @@ Common categories used by the agent:
    - **Position**: `(17, 0.5, 3)` - against kitchen wall
    - **Scale**: `(1, 1, 0.5)` - cabinet size
 4. Add component: `EntityMarker`
-   - Set **Label** to `Kitchen Drawer`
-   - Set **Category** to `container`
+   - Leave **Label** empty (backend learns from user)
+   - **GUID** will auto-generate
 5. Add component: `InteractableState`
    - Set **State Type** to `OpenClosed`
    - Set **Initial State** to `closed`
@@ -359,8 +362,8 @@ Common categories used by the agent:
    - **Position**: `(15, 0.4, 0)` - center of kitchen
    - **Scale**: `(2, 0.8, 1)` - table proportions
 4. Add component: `EntityMarker`
-   - Set **Label** to `Kitchen Table`
-   - Set **Category** to `furniture`
+   - Leave **Label** empty (backend learns from user)
+   - **GUID** will auto-generate
 5. No InteractableState needed (tables don't change state)
 
 #### 3.8.5 Create a Chair
@@ -371,8 +374,8 @@ Common categories used by the agent:
    - **Position**: `(15, 0.25, 1.5)` - beside table
    - **Scale**: `(0.5, 0.5, 0.5)` - chair size
 4. Add component: `EntityMarker`
-   - Set **Label** to `Kitchen Chair`
-   - Set **Category** to `furniture`
+   - Leave **Label** empty (backend learns from user)
+   - **GUID** will auto-generate
 
 #### 3.8.6 Create a Couch
 
@@ -382,8 +385,8 @@ Common categories used by the agent:
    - **Position**: `(0, 0.4, -3)` - living room
    - **Scale**: `(2.5, 0.8, 1)` - couch proportions
 4. Add component: `EntityMarker`
-   - Set **Label** to `Living Room Couch`
-   - Set **Category** to `furniture`
+   - Leave **Label** empty (backend learns from user)
+   - **GUID** will auto-generate
 
 #### 3.8.7 Organize Objects in Hierarchy
 

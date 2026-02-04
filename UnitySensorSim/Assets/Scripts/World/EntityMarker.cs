@@ -4,15 +4,19 @@ using UnityEngine;
 namespace EpisodicAgent.World
 {
     /// <summary>
-    /// Marks a GameObject as a trackable entity with stable GUID, label, and optional category.
-    /// This is the primary component for anything the agent should be aware of.
+    /// Marks a GameObject as a trackable entity with stable GUID.
+    /// 
+    /// ARCHITECTURAL INVARIANT: Unity does not assign semantic labels.
+    /// All labels are owned by the Python backend and learned from user interaction.
+    /// This component provides only observable properties: GUID, position, size, state.
     /// </summary>
     public class EntityMarker : MonoBehaviour
     {
         [Header("Entity Identity")]
         [SerializeField] private string entityGuid;
-        [SerializeField] private string label = "Unnamed Entity";
-        [SerializeField] private string category = "object";  // e.g., "furniture", "item", "prop", "door"
+        
+        // REMOVED: label and category fields - backend owns all semantic labeling
+        // Labels are learned from user interaction, not predefined in Unity.
 
         [Header("Tracking")]
         [SerializeField] private bool trackPosition = true;
@@ -21,8 +25,7 @@ namespace EpisodicAgent.World
 
         // Public accessors
         public string Guid => entityGuid;
-        public string Label => label;
-        public string Category => category;
+        // REMOVED: Label and Category properties - backend owns semantic meaning
 
         // Track last known transform for change detection
         private Vector3 lastPosition;
@@ -38,7 +41,7 @@ namespace EpisodicAgent.World
             if (string.IsNullOrEmpty(entityGuid))
             {
                 entityGuid = System.Guid.NewGuid().ToString();
-                Debug.Log($"[EntityMarker] Generated new GUID for entity '{label}': {entityGuid}");
+                Debug.Log($"[EntityMarker] Generated new GUID: {entityGuid}");
             }
 
             lastPosition = transform.position;
@@ -152,28 +155,16 @@ namespace EpisodicAgent.World
 #if UNITY_EDITOR
         private void OnDrawGizmos()
         {
-            // Draw entity marker icon
-            Gizmos.color = GetCategoryColor();
+            // Draw entity marker icon - neutral color since backend owns semantics
+            Gizmos.color = Color.white;
             Gizmos.DrawSphere(transform.position + Vector3.up * 0.1f, 0.15f);
         }
 
         private void OnDrawGizmosSelected()
         {
-            // Draw label when selected
+            // Draw GUID only - labels are backend-owned
             UnityEditor.Handles.Label(transform.position + Vector3.up * 0.5f, 
-                $"{label}\n[{category}]\n{(entityGuid?.Substring(0, 8) ?? "none")}...");
-        }
-
-        private Color GetCategoryColor()
-        {
-            return category switch
-            {
-                "furniture" => Color.yellow,
-                "door" => Color.cyan,
-                "item" => Color.green,
-                "prop" => Color.magenta,
-                _ => Color.white
-            };
+                $"Entity\nGUID: {(entityGuid?.Substring(0, 8) ?? "none")}...");
         }
 #endif
     }

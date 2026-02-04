@@ -62,8 +62,9 @@ class MockPerception(PerceptionModule):
     def process(self, frame: SensorFrame) -> Percept:
         return Percept(
             percept_id=f"percept_{frame.frame_id}",
+            source_frame_id=frame.frame_id,
             scene_embedding=[0.1, 0.2, 0.3],
-            objects=[
+            candidates=[
                 ObjectCandidate(
                     candidate_id=f"obj_{frame.frame_id}",
                     label="TestObject",
@@ -99,7 +100,7 @@ class MockEntityResolver(EntityResolver):
     """Mock entity resolver."""
     
     def resolve(self, percept: Percept, acf: ActiveContextFrame) -> list[ObjectCandidate]:
-        return percept.objects
+        return percept.candidates
 
 
 class MockEventResolver(EventResolver):
@@ -131,8 +132,14 @@ class MockRetriever(Retriever):
 class MockDialogManager(DialogManager):
     """Mock dialog manager."""
     
-    def ask_label(self, prompt: str, suggestions: list[str] | None = None) -> str:
-        return suggestions[0] if suggestions else "mock_label"
+    def request_label(self, prompt: str, candidates: list[str] | None = None) -> str | None:
+        return candidates[0] if candidates else "mock_label"
+    
+    def confirm(self, prompt: str, default: bool = True) -> bool:
+        return default
+    
+    def resolve_conflict(self, prompt: str, options: list[str]) -> int:
+        return 0  # Always pick first option
     
     def notify(self, message: str) -> None:
         pass
@@ -150,7 +157,7 @@ class MockEpisodeStore(EpisodeStore):
     def get(self, episode_id: str) -> Episode | None:
         return self._episodes.get(episode_id)
     
-    def list_all(self) -> list[Episode]:
+    def get_all(self) -> list[Episode]:
         return list(self._episodes.values())
     
     def count(self) -> int:
@@ -176,11 +183,14 @@ class MockGraphStore(GraphStore):
     def add_edge(self, edge) -> None:
         self._edges[edge.edge_id] = edge
     
-    def get_edges_from(self, node_id: str):
-        return [e for e in self._edges.values() if e.source_id == node_id]
+    def get_edges(self, node_id: str):
+        """Get all edges connected to a node (source or target)."""
+        return [e for e in self._edges.values() 
+                if e.source_node_id == node_id or e.target_node_id == node_id]
     
-    def get_edges_to(self, node_id: str):
-        return [e for e in self._edges.values() if e.target_id == node_id]
+    def get_all_nodes(self):
+        """Get all nodes in the graph."""
+        return list(self._nodes.values())
 
 
 # =============================================================================

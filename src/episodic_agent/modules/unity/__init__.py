@@ -1,4 +1,4 @@
-"""Unity integration modules for Phase 4."""
+"""Unity integration modules for live sensor streaming."""
 
 from episodic_agent.modules.unity.sensor_provider import UnityWebSocketSensorProvider
 from episodic_agent.modules.unity.perception import PerceptionUnityCheat

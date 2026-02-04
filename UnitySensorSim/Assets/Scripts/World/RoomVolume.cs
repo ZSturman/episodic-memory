@@ -4,23 +4,29 @@ using UnityEngine;
 namespace EpisodicAgent.World
 {
     /// <summary>
-    /// Marks a trigger volume as a "room" with a stable GUID and label.
-    /// The player entering this volume is considered to be in this room.
+    /// Marks a trigger volume as a room boundary with a stable GUID.
+    /// The player entering this volume is considered to be in this spatial region.
+    /// 
+    /// ARCHITECTURAL INVARIANT: Unity does not assign semantic labels.
+    /// All labels (room names) are owned by the Python backend and learned from user interaction.
+    /// This component provides only observable properties: GUID, bounds, containment.
     /// </summary>
     [RequireComponent(typeof(Collider))]
     public class RoomVolume : MonoBehaviour
     {
         [Header("Room Identity")]
         [SerializeField] private string roomGuid;
-        [SerializeField] private string label = "Unnamed Room";
         [SerializeField] private Color gizmoColor = new Color(0f, 1f, 0f, 0.25f);
+        
+        // REMOVED: label field - backend owns all semantic labeling
+        // Room names are learned from user interaction, not predefined in Unity.
 
         [Header("Spawn Point")]
         [SerializeField] private Transform spawnPoint;  // Optional custom spawn point
 
         // Public accessors
         public string Guid => roomGuid;
-        public string Label => label;
+        // REMOVED: Label property - backend owns semantic meaning
 
         // Events
         public event Action<Transform> OnPlayerEntered;
@@ -36,7 +42,7 @@ namespace EpisodicAgent.World
             if (string.IsNullOrEmpty(roomGuid))
             {
                 roomGuid = System.Guid.NewGuid().ToString();
-                Debug.Log($"[RoomVolume] Generated new GUID for room '{label}': {roomGuid}");
+                Debug.Log($"[RoomVolume] Generated new GUID: {roomGuid}");
             }
 
             // Ensure collider is a trigger
@@ -44,7 +50,7 @@ namespace EpisodicAgent.World
             if (col != null && !col.isTrigger)
             {
                 col.isTrigger = true;
-                Debug.LogWarning($"[RoomVolume] Set collider to trigger on room '{label}'");
+                Debug.LogWarning($"[RoomVolume] Set collider to trigger on room GUID: {roomGuid}");
             }
         }
 
@@ -62,7 +68,7 @@ namespace EpisodicAgent.World
             if (IsPlayer(other))
             {
                 playerInRoom = true;
-                Debug.Log($"[RoomVolume] Player entered room: {label}");
+                Debug.Log($"[RoomVolume] Player entered room GUID: {roomGuid}");
                 OnPlayerEntered?.Invoke(other.transform);
             }
         }
@@ -72,7 +78,7 @@ namespace EpisodicAgent.World
             if (IsPlayer(other))
             {
                 playerInRoom = false;
-                Debug.Log($"[RoomVolume] Player exited room: {label}");
+                Debug.Log($"[RoomVolume] Player exited room GUID: {roomGuid}");
                 OnPlayerExited?.Invoke(other.transform);
             }
         }
@@ -147,9 +153,9 @@ namespace EpisodicAgent.World
 
         private void OnDrawGizmosSelected()
         {
-            // Draw label
+            // Draw GUID only - labels are backend-owned
             UnityEditor.Handles.Label(transform.position + Vector3.up * 2f, 
-                $"Room: {label}\nGUID: {(roomGuid?.Substring(0, 8) ?? "none")}...");
+                $"Room\nGUID: {(roomGuid?.Substring(0, 8) ?? "none")}...");
         }
 #endif
     }

@@ -78,6 +78,17 @@ class InMemoryGraphStore(GraphStore):
         """
         return list(self._nodes.values())
 
+    def get_nodes_by_type(self, node_type: str) -> list[GraphNode]:
+        """Retrieve all nodes of a specific type.
+        
+        Args:
+            node_type: Type of nodes to retrieve (string).
+            
+        Returns:
+            List of nodes matching the type.
+        """
+        return [n for n in self._nodes.values() if n.node_type == node_type]
+
     def get_all_edges(self) -> list[GraphEdge]:
         """Retrieve all edges in the graph.
         
@@ -85,6 +96,49 @@ class InMemoryGraphStore(GraphStore):
             List of all edges.
         """
         return list(self._edges.values())
+
+    def get_edges_from_node(self, node_id: str) -> list[GraphEdge]:
+        """Get edges where the given node is the source.
+        
+        Args:
+            node_id: ID of the source node.
+            
+        Returns:
+            List of edges originating from the node.
+        """
+        edge_ids = self._edges_by_node.get(node_id, [])
+        return [
+            self._edges[eid]
+            for eid in edge_ids
+            if eid in self._edges and self._edges[eid].source_node_id == node_id
+        ]
+
+    def update_node(self, node: GraphNode) -> None:
+        """Update an existing node in the graph.
+        
+        Args:
+            node: Node with updated data.
+        """
+        if node.node_id in self._nodes:
+            self._nodes[node.node_id] = node
+
+    def remove_node(self, node_id: str) -> None:
+        """Remove a node and its edges from the graph.
+        
+        Args:
+            node_id: ID of the node to remove.
+        """
+        if node_id in self._nodes:
+            del self._nodes[node_id]
+        
+        # Remove edges connected to this node
+        edge_ids_to_remove = self._edges_by_node.get(node_id, [])
+        for edge_id in edge_ids_to_remove:
+            if edge_id in self._edges:
+                del self._edges[edge_id]
+        
+        if node_id in self._edges_by_node:
+            del self._edges_by_node[node_id]
 
     def clear(self) -> None:
         """Clear all nodes and edges from the graph."""

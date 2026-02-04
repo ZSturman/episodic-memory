@@ -1,44 +1,65 @@
-"""Event and delta schemas for change detection and event memory."""
+"""Event and delta schemas for change detection and event memory.
+
+ARCHITECTURAL INVARIANT: No predefined semantic categories.
+All event types and delta types are learned from user interaction.
+These are string-based and extensible, not fixed enums.
+"""
 
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class DeltaType(str, Enum):
-    """Types of deltas (changes) detected between steps."""
-    
-    NEW_ENTITY = "new_entity"           # Entity appeared (not in recent context)
-    MISSING_ENTITY = "missing_entity"   # Entity disappeared (was in recent context)
-    MOVED_ENTITY = "moved_entity"       # Entity position changed significantly
-    STATE_CHANGED = "state_changed"     # Entity state changed (open/closed, on/off)
+# =============================================================================
+# EXTENSIBLE TYPE DEFINITIONS (No Fixed Enums)
+# =============================================================================
+# 
+# ARCHITECTURAL INVARIANT: The system does not have built-in knowledge.
+# All semantic categories emerge from user interaction and stored memory.
+# 
+# These string constants are provided ONLY for:
+#   1. Internal system states (unknown, error)
+#   2. Structural change types (new, missing, moved, changed)
+# 
+# Semantic labels like "opened", "closed", "turned_on" must be LEARNED
+# from user interaction, not predefined.
+# =============================================================================
+
+# Structural delta types (not semantic - describe the structure of change)
+DELTA_TYPE_NEW = "new"              # Something new appeared
+DELTA_TYPE_MISSING = "missing"      # Something disappeared
+DELTA_TYPE_MOVED = "moved"          # Something changed position
+DELTA_TYPE_CHANGED = "changed"      # Something changed state
+
+# System states only (not semantic labels)
+EVENT_TYPE_UNKNOWN = "unknown"      # Event not yet labeled by user
 
 
-class EventType(str, Enum):
-    """Types of events that can be detected from deltas."""
+# Legacy enum aliases for backward compatibility during migration
+# TODO: Remove after all code migrated to string-based types
+class DeltaType:
+    """Legacy delta type constants for backward compatibility.
     
-    # State change events
-    OPENED = "opened"           # closed -> open (drawer, door, etc.)
-    CLOSED = "closed"           # open -> closed
-    TURNED_ON = "turned_on"     # off -> on (light, switch, etc.)
-    TURNED_OFF = "turned_off"   # on -> off
+    DEPRECATED: Use string values directly. These will be removed.
+    """
+    NEW_ENTITY = DELTA_TYPE_NEW
+    MISSING_ENTITY = DELTA_TYPE_MISSING
+    MOVED_ENTITY = DELTA_TYPE_MOVED
+    STATE_CHANGED = DELTA_TYPE_CHANGED
+
+
+class EventType:
+    """Legacy event type constants for backward compatibility.
     
-    # Appearance/disappearance events  
-    APPEARED = "appeared"       # Entity appeared
-    DISAPPEARED = "disappeared" # Entity disappeared
-    MOVED = "moved"             # Entity moved significantly
-    
-    # Interaction events
-    PICKED_UP = "picked_up"     # Entity was picked up
-    PUT_DOWN = "put_down"       # Entity was put down
-    
-    # Generic
-    STATE_CHANGE = "state_change"  # Generic state change
-    UNKNOWN = "unknown"            # Unknown event type
+    DEPRECATED: Use string values directly. These will be removed.
+    All semantic event types (opened, closed, etc.) should be learned
+    from user interaction, not predefined here.
+    """
+    UNKNOWN = EVENT_TYPE_UNKNOWN
+    # All other event types are LEARNED, not predefined
 
 
 class Delta(BaseModel):
@@ -46,10 +67,17 @@ class Delta(BaseModel):
     
     Represents a single change observed in the environment:
     entity appeared, disappeared, moved, or changed state.
+    
+    ARCHITECTURAL INVARIANT: delta_type is a string, not a fixed enum.
+    Structural types (new, missing, moved, changed) are system-defined.
+    Semantic interpretation is handled by the backend recognition layer.
     """
     
     delta_id: str = Field(..., description="Unique identifier for this delta")
-    delta_type: DeltaType = Field(..., description="Type of change detected")
+    delta_type: str = Field(
+        ..., 
+        description="Type of structural change detected (new/missing/moved/changed)"
+    )
     timestamp: datetime = Field(
         default_factory=datetime.now,
         description="When this delta was detected",
@@ -62,12 +90,9 @@ class Delta(BaseModel):
     )
     entity_label: str | None = Field(
         default=None,
-        description="Human-readable label of the entity",
+        description="Human-readable label of the entity (learned, not predefined)",
     )
-    entity_category: str | None = Field(
-        default=None,
-        description="Category of the entity (furniture, light, ball, etc.)",
-    )
+    # REMOVED: entity_category - backend learns categories from user interaction
     
     # State information for state changes
     pre_state: str | None = Field(
@@ -79,18 +104,32 @@ class Delta(BaseModel):
         description="State after the change",
     )
     
-    # Position information for movement
+    # Position information for movement (raw coordinates for internal use)
     pre_position: tuple[float, float, float] | None = Field(
         default=None,
-        description="Position before movement",
+        description="Position before movement (internal use)",
     )
     post_position: tuple[float, float, float] | None = Field(
         default=None,
-        description="Position after movement",
+        description="Position after movement (internal use)",
     )
     position_delta: float = Field(
         default=0.0,
-        description="Distance moved (for moved_entity deltas)",
+        description="Distance moved (for moved deltas)",
+    )
+    
+    # Relative position information (Phase 2 - landmark-based)
+    pre_relative_position: dict[str, Any] | None = Field(
+        default=None,
+        description="Position relative to landmarks before movement",
+    )
+    post_relative_position: dict[str, Any] | None = Field(
+        default=None,
+        description="Position relative to landmarks after movement",
+    )
+    movement_description: str | None = Field(
+        default=None,
+        description="Human-readable movement description (e.g., 'moved from near the table to near the door')",
     )
     
     # Context
@@ -130,13 +169,16 @@ class EventCandidate(BaseModel):
     """A candidate event detected from deltas.
     
     Represents a recognized pattern of change that may warrant a label.
-    Can be learned (labeled) or recognized against existing event types.
+    Can be learned (labeled) or recognized against existing event patterns.
+    
+    ARCHITECTURAL INVARIANT: event_type is a string, not a fixed enum.
+    All semantic event types are learned from user interaction.
     """
     
     event_id: str = Field(..., description="Unique identifier for this event")
-    event_type: EventType = Field(
-        default=EventType.UNKNOWN,
-        description="Recognized event type",
+    event_type: str = Field(
+        default=EVENT_TYPE_UNKNOWN,
+        description="Event type (learned from user, not predefined)",
     )
     timestamp: datetime = Field(
         default_factory=datetime.now,
@@ -145,8 +187,8 @@ class EventCandidate(BaseModel):
     
     # Label information
     label: str = Field(
-        default="unknown_event",
-        description="Human-readable event label",
+        default="unknown",
+        description="Human-readable event label (learned from user)",
     )
     labels: list[str] = Field(
         default_factory=list,
@@ -217,7 +259,7 @@ class EventCandidate(BaseModel):
         """Convert to dictionary for storage in ACF events list."""
         return {
             "event_id": self.event_id,
-            "event_type": self.event_type.value,
+            "event_type": self.event_type,  # Now a string, not enum
             "timestamp": self.timestamp.isoformat(),
             "label": self.label,
             "labels": self.labels,

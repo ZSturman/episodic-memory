@@ -2,10 +2,13 @@
 
 Computes deltas (changes) by comparing current perception state
 to recent context history:
-- new_entity: Entity present now, not in recent context
-- missing_entity: Entity was in recent context, now absent
-- moved_entity: Entity position changed significantly
-- state_changed: Entity interactable state changed
+- new: Entity present now, not in recent context
+- missing: Entity was in recent context, now absent
+- moved: Entity position changed significantly
+- changed: Entity interactable state changed
+
+ARCHITECTURAL INVARIANT: Delta types are structural, not semantic.
+Semantic interpretation is handled by the event recognition layer.
 """
 
 from __future__ import annotations
@@ -15,7 +18,13 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from episodic_agent.schemas.events import Delta, DeltaType
+from episodic_agent.schemas.events import (
+    Delta,
+    DELTA_TYPE_NEW,
+    DELTA_TYPE_MISSING,
+    DELTA_TYPE_MOVED,
+    DELTA_TYPE_CHANGED,
+)
 from episodic_agent.utils.config import DEFAULT_MOVE_THRESHOLD
 
 if TYPE_CHECKING:
@@ -206,10 +215,10 @@ class DeltaDetector:
         
         delta = Delta(
             delta_id=f"delta_{uuid.uuid4().hex[:12]}",
-            delta_type=DeltaType.NEW_ENTITY,
+            delta_type=DELTA_TYPE_NEW,
             entity_id=guid,
             entity_label=snapshot.label,
-            entity_category=snapshot.category,
+            # REMOVED: entity_category - backend learns semantics from user
             post_position=snapshot.position,
             post_state=snapshot.state,
             location_label=location_label,
@@ -248,10 +257,10 @@ class DeltaDetector:
         
         delta = Delta(
             delta_id=f"delta_{uuid.uuid4().hex[:12]}",
-            delta_type=DeltaType.MISSING_ENTITY,
+            delta_type=DELTA_TYPE_MISSING,
             entity_id=guid,
             entity_label=last_snapshot.label,
-            entity_category=last_snapshot.category,
+            # REMOVED: entity_category - backend learns semantics from user
             pre_position=last_snapshot.position,
             pre_state=last_snapshot.state,
             location_label=location_label,
@@ -297,10 +306,10 @@ class DeltaDetector:
         
         delta = Delta(
             delta_id=f"delta_{uuid.uuid4().hex[:12]}",
-            delta_type=DeltaType.MOVED_ENTITY,
+            delta_type=DELTA_TYPE_MOVED,
             entity_id=guid,
             entity_label=curr.label,
-            entity_category=curr.category,
+            # REMOVED: entity_category - backend learns semantics from user
             pre_position=prev.position,
             post_position=curr.position,
             position_delta=distance,
@@ -349,10 +358,10 @@ class DeltaDetector:
         
         delta = Delta(
             delta_id=f"delta_{uuid.uuid4().hex[:12]}",
-            delta_type=DeltaType.STATE_CHANGED,
+            delta_type=DELTA_TYPE_CHANGED,
             entity_id=guid,
             entity_label=curr.label,
-            entity_category=curr.category,
+            # REMOVED: entity_category - backend learns semantics from user
             pre_state=prev.state,
             post_state=curr.state,
             post_position=curr.position,
