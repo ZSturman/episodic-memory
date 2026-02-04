@@ -662,6 +662,88 @@ def scenario(
 
 
 @app.command()
+def visualize(
+    run_folder: Path = typer.Argument(
+        ...,
+        help="Path to run folder (e.g., runs/20260202_174416)",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+    ),
+    html: bool = typer.Option(
+        False,
+        "--html",
+        "-H",
+        help="Generate interactive HTML report",
+    ),
+    csv: bool = typer.Option(
+        False,
+        "--csv",
+        "-c",
+        help="Export data to CSV for external analysis",
+    ),
+    plot: bool = typer.Option(
+        False,
+        "--plot",
+        "-p",
+        help="Generate matplotlib plots (requires matplotlib)",
+    ),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Custom output path for generated files",
+    ),
+) -> None:
+    """Visualize and analyze run data.
+    
+    Load a completed run and generate visualizations for analysis.
+    
+    Examples:
+        # Print summary
+        python -m episodic_agent visualize runs/20260202_174416
+        
+        # Generate HTML report
+        python -m episodic_agent visualize runs/20260202_174416 --html
+        
+        # Export CSV
+        python -m episodic_agent visualize runs/20260202_174416 --csv
+        
+        # Generate matplotlib plots
+        python -m episodic_agent visualize runs/20260202_174416 --plot
+    """
+    from episodic_agent.visualize import RunVisualizer, plot_with_matplotlib
+    
+    try:
+        viz = RunVisualizer(run_folder)
+        viz.load()
+        
+        # Always print summary
+        viz.print_summary()
+        
+        if html:
+            output_path = output if output else None
+            path = viz.generate_html_report(output_path)
+            typer.echo(f"Generated HTML report: {path}")
+        
+        if csv:
+            output_path = output if output else None
+            path = viz.export_csv(output_path)
+            typer.echo(f"Exported CSV: {path}")
+        
+        if plot:
+            output_path = output if output else None
+            plot_with_matplotlib(run_folder, output_path)
+        
+    except FileNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
 def version() -> None:
     """Show version information."""
     from episodic_agent import __version__

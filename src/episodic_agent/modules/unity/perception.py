@@ -141,8 +141,13 @@ class PerceptionUnityCheat(PerceptionModule):
     def process(self, frame: SensorFrame) -> Percept:
         """Process a sensor frame into a percept using Unity cheat data.
         
-        Extracts room GUID and entity data from frame.extras (populated by
+        Extracts room and entity observations from frame.extras (populated by
         UnityWebSocketSensorProvider) and generates deterministic embeddings.
+        
+        Note: Room information is treated as an observation, not ground truth.
+        In real-world scenarios, the agent discovers rooms through sensor patterns
+        rather than having them pre-defined. The model's view of the world
+        should only be updated through sensor observations and user input.
         
         Args:
             frame: Raw sensor frame with Unity data in extras.
@@ -152,8 +157,9 @@ class PerceptionUnityCheat(PerceptionModule):
         """
         extras = frame.extras or {}
         
-        # Get room GUID for scene embedding
-        room_guid = extras.get("current_room")
+        # Get room observation (if available) - support both field names
+        # Note: Room may be None in real-world scenarios where location isn't known
+        room_guid = extras.get("current_room_guid") or extras.get("current_room")
         room_label = extras.get("current_room_label", "unknown")
         
         # Generate scene embedding from room GUID

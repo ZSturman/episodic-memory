@@ -18,7 +18,11 @@ logger = logging.getLogger(__name__)
 
 # Protocol version we expect from Unity
 EXPECTED_PROTOCOL_VERSION = "1.0.0"
-REQUIRED_FIELDS = ["protocol_version", "frame_id", "timestamp", "current_room", "entities"]
+# Only truly required fields - room/location info is optional since real-world sensors
+# may not know the current room (agent must discover/learn rooms from sensor data)
+REQUIRED_FIELDS = ["protocol_version", "frame_id", "timestamp"]
+# Optional fields that enhance the frame but aren't required for basic operation
+OPTIONAL_FIELDS = ["current_room", "current_room_guid", "current_room_label", "entities", "camera_pose"]
 
 
 class ConnectionState:
@@ -287,12 +291,18 @@ class UnityWebSocketSensorProvider(SensorProvider):
         
         Maps Unity fields to the standard SensorFrame, storing Unity-specific
         data in extras for the perception module.
+        
+        Note: Room/location information is optional. In real-world scenarios,
+        the agent must discover and learn room boundaries from sensor patterns,
+        not rely on pre-defined room labels. The model's view of the world
+        should only be updated through sensor observations and user input,
+        never through hardcoded IDs or labels.
         """
         # Parse timestamp
         timestamp = datetime.fromtimestamp(data.get("timestamp", time.time()))
         
         # Extract camera pose for raw_data
-        camera_pose = data.get("camera_pose", {})
+        camera_pose = data.get("camera_pose", data.get("camera", {}))
         
         # Build raw_data with core sensor info
         raw_data = {
@@ -301,12 +311,24 @@ class UnityWebSocketSensorProvider(SensorProvider):
             "camera_forward": camera_pose.get("forward"),
         }
         
-        # Store Unity-specific cheat fields in extras for perception
+        # Handle room info - support both field naming conventions
+        # Unity sends: current_room_guid, current_room_label
+        # Also support: current_room (for backward compatibility)
+        # Note: Room info is OPTIONAL - real-world sensors may not know the current room
+        current_room_guid = data.get("current_room_guid") or data.get("current_room")
+        current_room_label = data.get("current_room_label")
+        
+        # Store sensor data in extras for perception module to process
+        # The perception module should use these as observations, not as ground truth
         extras = {
             "protocol_version": data.get("protocol_version"),
-            "current_room": data.get("current_room"),  # Room GUID
-            "current_room_label": data.get("current_room_label"),
-            "entities": data.get("entities", []),  # Full entity data with GUIDs
+            # Room observation (if available from sensor) - agent must verify/learn this
+            "current_room_guid": current_room_guid,  
+            "current_room_label": current_room_label,
+            # Legacy field name for backward compatibility
+            "current_room": current_room_guid,
+            # Entity observations (positions, states) - not identities
+            "entities": data.get("entities", []),
             "state_changes": data.get("state_changes", []),
             "camera_pose": camera_pose,
         }

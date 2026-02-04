@@ -1,0 +1,28 @@
+Package           Version Editable project location
+----------------- ------- ----------------------------------------------------------------------
+annotated-types   0.7.0
+click             8.3.1
+coverage          7.13.2
+episodic-agent    0.1.0   /Users/zacharysturman/Downloads/PORTFOLIO/_Tests/episodic-memory-agent
+iniconfig         2.3.0
+librt             0.7.8
+markdown-it-py    4.0.0
+mdurl             0.1.2
+mypy              1.19.1
+mypy_extensions   1.1.0
+packaging         26.0
+pathspec          1.0.4
+pip               24.0
+pluggy            1.6.0
+pydantic          2.12.5
+pydantic_core     2.41.5
+Pygments          2.19.2
+pytest            9.0.2
+pytest-cov        7.0.0
+rich              14.3.2
+ruff              0.14.14
+shellingham       1.5.4
+typer             0.21.1
+typing_extensions 4.15.0
+typing-inspection 0.4.2
+websockets        16.0
