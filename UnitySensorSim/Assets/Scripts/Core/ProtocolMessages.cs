@@ -144,6 +144,23 @@ namespace EpisodicAgent.Protocol
 
         // For generic entity operations
         public string entity_label;
+
+        // ---- Dynamic visualization commands (backend → Unity) ----
+
+        // For create_room_volume / update_room_volume
+        public string location_id;       // Backend-assigned location ID
+        public string label;             // Label for display
+        public Vector3Data center;       // Center position of volume
+        public Vector3Data extent;       // Half-extents (box size / 2)
+        public float radius;             // Radius for sphere volumes
+        public string color;             // Hex color string (e.g., "#FF8800")
+        public float opacity;            // 0.0–1.0 for semi-transparent volumes
+
+        // For set_entity_label
+        // entity_guid + label (reused from above)
+
+        // For clear_dynamic_volumes
+        // No extra params needed
     }
 
     /// <summary>
@@ -201,5 +218,12 @@ namespace EpisodicAgent.Protocol
         public const string MOVE_BALL = "move_ball";
         public const string RESET_WORLD = "reset_world";
         public const string GET_WORLD_STATE = "get_world_state";
+
+        // Dynamic visualization commands (Python backend → Unity overlay)
+        public const string CREATE_ROOM_VOLUME = "create_room_volume";
+        public const string UPDATE_ROOM_VOLUME = "update_room_volume";
+        public const string REMOVE_ROOM_VOLUME = "remove_room_volume";
+        public const string SET_ENTITY_LABEL = "set_entity_label";
+        public const string CLEAR_DYNAMIC_VOLUMES = "clear_dynamic_volumes";
     }
 }

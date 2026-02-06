@@ -1,0 +1,563 @@
+"""Real location resolver using scene fingerprinting.
+
+Discovers location boundaries from statistical regularities in the
+perception stream — no Unity GUIDs required. Works identically with
+real-world sensors or simulated environments.
+
+Algorithm:
+1. Each frame produces a scene_embedding (from any PerceptionModule)
+2. Cosine distance to the current location's centroid is tracked
+3. When distance exceeds a threshold for N consecutive frames
+   (hysteresis), a location transition is declared
+4. The new scene fingerprint is matched against known locations
+   or a new location is created
+5. User is prompted for labels via dialog_manager
+
+ARCHITECTURAL INVARIANT: No pre-wired semantics. The resolver never
+reads Unity GUIDs, room names, or any ground-truth labels. It only
+sees perception embeddings and agent-relative positions.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+from episodic_agent.core.interfaces import LocationResolver
+from episodic_agent.schemas import (
+    ActiveContextFrame,
+    EdgeType,
+    GraphEdge,
+    GraphNode,
+    LocationFingerprint,
+    NodeType,
+    Percept,
+)
+from episodic_agent.utils.confidence import ConfidenceHelper, ConfidenceSignal
+from episodic_agent.utils.config import (
+    CONFIDENCE_T_HIGH,
+    CONFIDENCE_T_LOW,
+    DEFAULT_EMBEDDING_DIM,
+)
+
+if TYPE_CHECKING:
+    from episodic_agent.memory.graph_store import LabeledGraphStore
+    from episodic_agent.modules.dialog import DialogManager
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Utility: cosine distance
+# ---------------------------------------------------------------------------
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors.
+    
+    Returns value in [-1, 1]; 1 = identical directions, 0 = orthogonal.
+    """
+    if len(a) != len(b) or not a:
+        return 0.0
+
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+
+    if norm_a < 1e-9 or norm_b < 1e-9:
+        return 0.0
+
+    return dot / (norm_a * norm_b)
+
+
+def _cosine_distance(a: list[float], b: list[float]) -> float:
+    """Cosine distance (0 = identical, 2 = opposite)."""
+    return 1.0 - _cosine_similarity(a, b)
+
+
+def _running_average(
+    centroid: list[float],
+    new_vec: list[float],
+    count: int,
+) -> list[float]:
+    """Compute an incremental running average of embedding vectors.
+
+    centroid = ((centroid * count) + new_vec) / (count + 1)
+    """
+    if not centroid:
+        return list(new_vec)
+    n = count + 1
+    return [(c * count + v) / n for c, v in zip(centroid, new_vec)]
+
+
+# ---------------------------------------------------------------------------
+# LocationResolverReal
+# ---------------------------------------------------------------------------
+
+class LocationResolverReal(LocationResolver):
+    """Location resolver using perception-based scene fingerprinting.
+
+    Instead of relying on Unity room GUIDs (like LocationResolverCheat)
+    this resolver discovers location boundaries from the scene embedding
+    stream that any PerceptionModule produces.
+
+    Features:
+    - Scene fingerprinting via centroid embeddings
+    - Transition detection with cosine distance + hysteresis
+    - Location matching against known fingerprints
+    - User label prompting via dialog_manager
+    - Graph persistence of discovered locations
+    - Tracks transition positions for boundary estimation
+
+    Constructor parameters:
+        graph_store:        Graph store for persistence.
+        dialog_manager:     For label prompting.
+        transition_threshold:   Cosine distance to trigger a candidate
+                                transition (default 0.40).
+        hysteresis_frames:  Consecutive frames above threshold before
+                            accepting a transition (default 5).
+        match_threshold:    Max cosine distance to consider a fingerprint
+                            match to a known location (default 0.35).
+        embedding_dim:      Dimensionality of scene embeddings.
+        auto_label:         If True, auto-generates labels without prompt.
+    """
+
+    def __init__(
+        self,
+        graph_store: "LabeledGraphStore",
+        dialog_manager: "DialogManager",
+        transition_threshold: float = 0.40,
+        hysteresis_frames: int = 5,
+        match_threshold: float = 0.35,
+        embedding_dim: int = DEFAULT_EMBEDDING_DIM,
+        auto_label: bool = False,
+    ) -> None:
+        self._graph_store = graph_store
+        self._dialog_manager = dialog_manager
+        self._transition_threshold = transition_threshold
+        self._hysteresis_frames = hysteresis_frames
+        self._match_threshold = match_threshold
+        self._embedding_dim = embedding_dim
+        self._auto_label = auto_label
+
+        self._confidence_helper = ConfidenceHelper()
+
+        # ── internal state ──────────────────────────────────────────────
+        self._current_location_id: str | None = None
+        self._fingerprints: dict[str, LocationFingerprint] = {}
+
+        # Hysteresis counters
+        self._transition_counter: int = 0
+        self._candidate_embedding_buffer: list[list[float]] = []
+
+        # Pending label request tracking
+        self._pending_label_request: str | None = None
+
+        # Load any persisted fingerprints from the graph store
+        self._load_persisted_locations()
+
+    # ------------------------------------------------------------------
+    # LocationResolver interface
+    # ------------------------------------------------------------------
+
+    def resolve(
+        self,
+        percept: Percept,
+        acf: ActiveContextFrame,
+    ) -> tuple[str, float]:
+        """Resolve current location from the scene embedding.
+
+        Args:
+            percept: Current perception (must have scene_embedding).
+            acf:     Active context frame.
+
+        Returns:
+            (location_label, confidence)
+        """
+        embedding = percept.scene_embedding
+        if not embedding:
+            # No embedding available — return current or unknown
+            if self._current_location_id:
+                fp = self._fingerprints.get(self._current_location_id)
+                node = self._find_node_for_location(self._current_location_id)
+                label = node.label if node else "unknown"
+                conf = self._compute_confidence(fp, 0.0) if fp else 0.0
+                return (label, conf)
+            return ("unknown", 0.0)
+
+        # Extract agent position from extras for boundary tracking
+        agent_pos = self._extract_agent_position(percept)
+
+        # ── first-ever frame: bootstrap a location ──────────────────
+        if self._current_location_id is None:
+            return self._bootstrap_first_location(embedding, agent_pos)
+
+        # ── check distance to current centroid ──────────────────────
+        current_fp = self._fingerprints[self._current_location_id]
+        distance = _cosine_distance(embedding, current_fp.centroid_embedding)
+
+        if distance < self._transition_threshold:
+            # Still in the same location — update centroid
+            self._transition_counter = 0
+            self._candidate_embedding_buffer.clear()
+            current_fp.centroid_embedding = _running_average(
+                current_fp.centroid_embedding,
+                embedding,
+                current_fp.observation_count,
+            )
+            current_fp.observation_count += 1
+            current_fp.last_visited = datetime.now()
+
+            # Update entity co-occurrence
+            self._update_entity_cooccurrence(current_fp, percept)
+
+            node = self._find_node_for_location(self._current_location_id)
+            label = node.label if node else "unknown"
+            confidence = self._compute_confidence(current_fp, distance)
+            return (label, confidence)
+
+        # ── candidate transition ────────────────────────────────────
+        self._transition_counter += 1
+        self._candidate_embedding_buffer.append(embedding)
+
+        if self._transition_counter < self._hysteresis_frames:
+            # Not yet enough consecutive frames — stay put
+            node = self._find_node_for_location(self._current_location_id)
+            label = node.label if node else "unknown"
+            # Return lower confidence to signal instability
+            confidence = max(0.0, self._compute_confidence(current_fp, distance) - 0.2)
+            return (label, confidence)
+
+        # ── transition confirmed ────────────────────────────────────
+        logger.info(
+            "Location transition detected (distance=%.3f, frames=%d)",
+            distance,
+            self._transition_counter,
+        )
+
+        # Record transition position on the old location
+        if agent_pos:
+            current_fp.transition_positions.append(agent_pos)
+
+        # Average the buffer into a candidate centroid
+        candidate_centroid = self._average_buffer()
+        self._transition_counter = 0
+        self._candidate_embedding_buffer.clear()
+
+        # Try to match candidate against known locations
+        match_id, match_dist = self._find_best_match(candidate_centroid)
+
+        if match_id and match_id != self._current_location_id:
+            # Revisiting a known location
+            return self._handle_revisit(match_id, candidate_centroid, agent_pos)
+        else:
+            # New location discovered
+            return self._handle_new_location(candidate_centroid, agent_pos, percept)
+
+    # ------------------------------------------------------------------
+    # Public accessors
+    # ------------------------------------------------------------------
+
+    def get_location_fingerprint(self, location_id: str) -> LocationFingerprint | None:
+        """Get the fingerprint for a discovered location."""
+        return self._fingerprints.get(location_id)
+
+    def get_all_fingerprints(self) -> dict[str, LocationFingerprint]:
+        """Get all discovered location fingerprints."""
+        return dict(self._fingerprints)
+
+    def get_location_node(self, location_id: str) -> GraphNode | None:
+        """Get the graph node for a location ID (public accessor)."""
+        return self._find_node_for_location(location_id)
+
+    # ------------------------------------------------------------------
+    # Bootstrap / first frame
+    # ------------------------------------------------------------------
+
+    def _bootstrap_first_location(
+        self,
+        embedding: list[float],
+        agent_pos: tuple[float, float, float] | None,
+    ) -> tuple[str, float]:
+        """Create the very first location from the first frame."""
+        location_id = f"loc_fp_{uuid.uuid4().hex[:12]}"
+
+        fp = LocationFingerprint(
+            location_id=location_id,
+            centroid_embedding=list(embedding),
+            observation_count=1,
+            approximate_center=agent_pos,
+            first_visited=datetime.now(),
+            last_visited=datetime.now(),
+        )
+        self._fingerprints[location_id] = fp
+        self._current_location_id = location_id
+
+        # Create graph node
+        node = self._create_location_node(location_id, embedding, agent_pos)
+        label = node.label
+
+        self._dialog_manager.notify(f"📍 First location established: {label}")
+        return (label, CONFIDENCE_T_LOW)
+
+    # ------------------------------------------------------------------
+    # Revisit a known location
+    # ------------------------------------------------------------------
+
+    def _handle_revisit(
+        self,
+        location_id: str,
+        candidate_centroid: list[float],
+        agent_pos: tuple[float, float, float] | None,
+    ) -> tuple[str, float]:
+        """Handle returning to a previously seen location."""
+        fp = self._fingerprints[location_id]
+        fp.centroid_embedding = _running_average(
+            fp.centroid_embedding,
+            candidate_centroid,
+            fp.observation_count,
+        )
+        fp.observation_count += 1
+        fp.last_visited = datetime.now()
+        if agent_pos:
+            fp.transition_positions.append(agent_pos)
+
+        self._current_location_id = location_id
+
+        node = self._find_node_for_location(location_id)
+        if node:
+            node.last_accessed = datetime.now()
+            node.access_count += 1
+            label = node.label
+        else:
+            label = f"location_{location_id[:8]}"
+
+        distance = _cosine_distance(candidate_centroid, fp.centroid_embedding)
+        confidence = self._compute_confidence(fp, distance)
+
+        self._dialog_manager.notify(f"📍 Returned to: {label}")
+        logger.info("Revisiting location: %s (visits=%d)", label, fp.observation_count)
+
+        return (label, confidence)
+
+    # ------------------------------------------------------------------
+    # New location discovered
+    # ------------------------------------------------------------------
+
+    def _handle_new_location(
+        self,
+        candidate_centroid: list[float],
+        agent_pos: tuple[float, float, float] | None,
+        percept: Percept,
+    ) -> tuple[str, float]:
+        """Handle discovery of a new location."""
+        location_id = f"loc_fp_{uuid.uuid4().hex[:12]}"
+
+        fp = LocationFingerprint(
+            location_id=location_id,
+            centroid_embedding=list(candidate_centroid),
+            observation_count=1,
+            approximate_center=agent_pos,
+            first_visited=datetime.now(),
+            last_visited=datetime.now(),
+        )
+
+        # Capture entities currently visible
+        for candidate in percept.candidates:
+            guid = candidate.extras.get("guid", candidate.candidate_id) if candidate.extras else candidate.candidate_id
+            if guid not in fp.entity_guids_seen:
+                fp.entity_guids_seen.append(guid)
+            fp.entity_cooccurrence_counts[guid] = fp.entity_cooccurrence_counts.get(guid, 0) + 1
+
+        self._fingerprints[location_id] = fp
+        self._current_location_id = location_id
+
+        node = self._create_location_node(location_id, candidate_centroid, agent_pos)
+        label = node.label
+
+        self._dialog_manager.notify(f"🆕 New location discovered: {label}")
+        logger.info("New location: %s", label)
+
+        return (label, CONFIDENCE_T_LOW)
+
+    # ------------------------------------------------------------------
+    # Graph persistence helpers
+    # ------------------------------------------------------------------
+
+    def _create_location_node(
+        self,
+        location_id: str,
+        embedding: list[float],
+        agent_pos: tuple[float, float, float] | None,
+    ) -> GraphNode:
+        """Create a new graph node for a discovered location."""
+        if self._auto_label:
+            label = f"location_{location_id[-8:]}"
+        else:
+            suggestions = [f"location_{location_id[-8:]}"]
+            self._dialog_manager.notify("🆕 New location detected!")
+            label = self._dialog_manager.ask_label(
+                "What should this location be called?",
+                suggestions=suggestions,
+            )
+
+        node = GraphNode(
+            node_id=location_id,
+            node_type=NodeType.LOCATION,
+            label=label,
+            labels=[],
+            embedding=embedding[:self._embedding_dim] if len(embedding) > self._embedding_dim else embedding,
+            source_id=location_id,
+            confidence=CONFIDENCE_T_LOW,
+            created_at=datetime.now(),
+            last_accessed=datetime.now(),
+            access_count=1,
+            extras={
+                "source": "fingerprint",
+                "agent_position": list(agent_pos) if agent_pos else None,
+            },
+        )
+
+        self._graph_store.add_node(node)
+        return node
+
+    def _find_node_for_location(self, location_id: str) -> GraphNode | None:
+        """Find the graph node associated with a location ID."""
+        location_nodes = self._graph_store.get_nodes_by_type(NodeType.LOCATION)
+        for node in location_nodes:
+            if node.source_id == location_id or node.node_id == location_id:
+                return node
+        return None
+
+    def _load_persisted_locations(self) -> None:
+        """Load previously persisted location nodes into fingerprints.
+
+        On startup, reconstruct fingerprint state from graph nodes that
+        were created by a prior run (source == 'fingerprint').
+        """
+        try:
+            location_nodes = self._graph_store.get_nodes_by_type(NodeType.LOCATION)
+        except Exception:
+            return
+
+        for node in location_nodes:
+            if node.extras.get("source") != "fingerprint":
+                continue
+            lid = node.source_id or node.node_id
+            if lid in self._fingerprints:
+                continue
+
+            fp = LocationFingerprint(
+                location_id=lid,
+                centroid_embedding=node.embedding or [],
+                observation_count=node.access_count,
+                first_visited=node.created_at,
+                last_visited=node.last_accessed,
+            )
+            self._fingerprints[lid] = fp
+            logger.debug("Loaded persisted fingerprint: %s (%s)", node.label, lid)
+
+    # ------------------------------------------------------------------
+    # Matching & similarity
+    # ------------------------------------------------------------------
+
+    def _find_best_match(
+        self,
+        candidate_centroid: list[float],
+    ) -> tuple[str | None, float]:
+        """Find the best matching known location for a candidate centroid.
+
+        Returns (location_id, cosine_distance) or (None, inf) if no match.
+        """
+        best_id: str | None = None
+        best_dist = float("inf")
+
+        for lid, fp in self._fingerprints.items():
+            if lid == self._current_location_id:
+                continue  # skip the location we're leaving
+            if not fp.centroid_embedding:
+                continue
+            dist = _cosine_distance(candidate_centroid, fp.centroid_embedding)
+            if dist < best_dist:
+                best_dist = dist
+                best_id = lid
+
+        if best_dist <= self._match_threshold:
+            return (best_id, best_dist)
+        return (None, best_dist)
+
+    # ------------------------------------------------------------------
+    # Confidence computation
+    # ------------------------------------------------------------------
+
+    def _compute_confidence(
+        self,
+        fp: LocationFingerprint,
+        distance: float,
+    ) -> float:
+        """Compute confidence for current location assignment."""
+        signals = [
+            ConfidenceSignal(
+                "embedding_closeness",
+                max(0.0, 1.0 - distance),
+                weight=2.0,
+            ),
+            ConfidenceSignal(
+                "visit_count",
+                min(1.0, fp.observation_count / 20.0),
+                weight=1.0,
+            ),
+        ]
+        return self._confidence_helper.combine_weighted(signals)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _average_buffer(self) -> list[float]:
+        """Average the hysteresis embedding buffer into a single centroid."""
+        if not self._candidate_embedding_buffer:
+            return []
+        dim = len(self._candidate_embedding_buffer[0])
+        avg = [0.0] * dim
+        for vec in self._candidate_embedding_buffer:
+            for i, v in enumerate(vec):
+                avg[i] += v
+        n = len(self._candidate_embedding_buffer)
+        return [x / n for x in avg]
+
+    @staticmethod
+    def _extract_agent_position(
+        percept: Percept,
+    ) -> tuple[float, float, float] | None:
+        """Extract agent position from percept extras (if available)."""
+        extras = percept.extras or {}
+        camera_pose = extras.get("camera_pose")
+        if camera_pose and isinstance(camera_pose, dict):
+            pos = camera_pose.get("position", {})
+            x = pos.get("x")
+            y = pos.get("y")
+            z = pos.get("z")
+            if x is not None and y is not None and z is not None:
+                return (float(x), float(y), float(z))
+        return None
+
+    def _update_entity_cooccurrence(
+        self,
+        fp: LocationFingerprint,
+        percept: Percept,
+    ) -> None:
+        """Update entity co-occurrence counts for the current location."""
+        for candidate in percept.candidates:
+            guid = (
+                candidate.extras.get("guid", candidate.candidate_id)
+                if candidate.extras
+                else candidate.candidate_id
+            )
+            if guid not in fp.entity_guids_seen:
+                fp.entity_guids_seen.append(guid)
+            fp.entity_cooccurrence_counts[guid] = (
+                fp.entity_cooccurrence_counts.get(guid, 0) + 1
+            )

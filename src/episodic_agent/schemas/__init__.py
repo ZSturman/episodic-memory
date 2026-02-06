@@ -42,6 +42,7 @@ from episodic_agent.schemas.salience import (
 )
 from episodic_agent.schemas.spatial import (
     LandmarkReference,
+    LocationFingerprint,
     PositionObservation,
     RelativePosition,
     SpatialRelation,
@@ -125,6 +126,7 @@ __all__ = [
     "LearnedLabel",
     "LearningRequest",
     "LearningSession",
+    "LocationFingerprint",
     "LocationRevisit",
     "NodeType",
     "ObjectCandidate",

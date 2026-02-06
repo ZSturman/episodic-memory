@@ -135,6 +135,40 @@ Sends commands to Unity.
 - spawn_ball / move_ball / despawn_ball
 - reset_world
 - get_world_state
+- create_room_volume / update_room_volume / remove_room_volume
+- set_entity_label
+- clear_dynamic_volumes
+```
+
+---
+
+## Real Resolvers (sensor-agnostic)
+
+### LocationResolverReal (`modules/spatial_resolver.py`)
+
+Fingerprint-based location resolution without Unity GUIDs.
+
+```python
+# Algorithm
+1. Build scene fingerprint from percept embedding
+2. Cosine distance to detect location transitions
+3. Hysteresis (N consecutive frames) prevents flickering
+4. Match against known fingerprints via centroid similarity
+5. If no match, prompt user for label via DialogManager
+6. Running average centroids adapt over time
+```
+
+### EntityResolverReal (`modules/entity_resolver_real.py`)
+
+Embedding-similarity entity resolution without Unity GUIDs.
+
+```python
+# Algorithm
+1. Match percept candidates by embedding cosine similarity
+2. Threshold-based: above match_threshold → known entity
+3. Below threshold → create new entity node in graph
+4. Links entities to locations via typical_in edges
+5. Optionally prompts user for labels on new entities
 ```
 
 ---

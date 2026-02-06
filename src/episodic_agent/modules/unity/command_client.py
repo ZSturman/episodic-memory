@@ -395,6 +395,122 @@ class UnityCommandClient:
             command_type=CommandType.RESET,
         ))
 
+    # ---- Dynamic visualization commands (backend → Unity overlay) ----
+
+    def create_room_volume(
+        self,
+        location_id: str,
+        label: str,
+        center: tuple[float, float, float],
+        extent: tuple[float, float, float],
+        color: str | None = None,
+        opacity: float = 0.15,
+    ) -> CommandResult:
+        """Create a visualization volume in Unity for a discovered location.
+
+        Args:
+            location_id: Backend-assigned location ID.
+            label:       Human-readable label for the volume.
+            center:      (x, y, z) center position.
+            extent:      (x, y, z) half-extents.
+            color:       Optional hex color string (e.g., "#FF8800").
+            opacity:     Opacity 0.0–1.0.
+
+        Returns:
+            CommandResult.
+        """
+        params: dict[str, Any] = {
+            "location_id": location_id,
+            "label": label,
+            "center": {"x": center[0], "y": center[1], "z": center[2]},
+            "extent": {"x": extent[0], "y": extent[1], "z": extent[2]},
+            "opacity": opacity,
+        }
+        if color:
+            params["color"] = color
+
+        return self.send_command(UnityCommand(
+            command_type=CommandType.SET_STATE,  # reuse generic type
+            target_id=location_id,
+            target_label=label,
+            parameters={"_wire_command": "create_room_volume", **params},
+        ))
+
+    def update_room_volume(
+        self,
+        location_id: str,
+        label: str | None = None,
+        center: tuple[float, float, float] | None = None,
+        extent: tuple[float, float, float] | None = None,
+        color: str | None = None,
+        opacity: float | None = None,
+    ) -> CommandResult:
+        """Update an existing visualization volume.
+
+        Args:
+            location_id: Backend-assigned location ID.
+            label:       New label (if any).
+            center:      New center (if any).
+            extent:      New half-extents (if any).
+            color:       New hex color (if any).
+            opacity:     New opacity (if any).
+
+        Returns:
+            CommandResult.
+        """
+        params: dict[str, Any] = {"location_id": location_id}
+        if label:
+            params["label"] = label
+        if center:
+            params["center"] = {"x": center[0], "y": center[1], "z": center[2]}
+        if extent:
+            params["extent"] = {"x": extent[0], "y": extent[1], "z": extent[2]}
+        if color:
+            params["color"] = color
+        if opacity is not None:
+            params["opacity"] = opacity
+
+        return self.send_command(UnityCommand(
+            command_type=CommandType.SET_STATE,
+            target_id=location_id,
+            parameters={"_wire_command": "update_room_volume", **params},
+        ))
+
+    def set_entity_label(
+        self,
+        entity_guid: str,
+        label: str,
+    ) -> CommandResult:
+        """Set a floating label on an entity in Unity.
+
+        Args:
+            entity_guid: GUID of the target entity.
+            label:       Label text to display.
+
+        Returns:
+            CommandResult.
+        """
+        return self.send_command(UnityCommand(
+            command_type=CommandType.SET_STATE,
+            target_id=entity_guid,
+            parameters={
+                "_wire_command": "set_entity_label",
+                "entity_guid": entity_guid,
+                "label": label,
+            },
+        ))
+
+    def clear_dynamic_volumes(self) -> CommandResult:
+        """Clear all dynamic visualization volumes in Unity.
+
+        Returns:
+            CommandResult.
+        """
+        return self.send_command(UnityCommand(
+            command_type=CommandType.SET_STATE,
+            parameters={"_wire_command": "clear_dynamic_volumes"},
+        ))
+
     def get_statistics(self) -> dict[str, Any]:
         """Get command client statistics.
         

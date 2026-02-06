@@ -403,6 +403,7 @@
 "Assets/Scripts/Player/FirstPersonController.cs"
 "Assets/Scripts/Player/PlayerInteraction.cs"
 "Assets/Scripts/UI/ConnectionHUD.cs"
+"Assets/Scripts/World/DynamicWorldBuilder.cs"
 "Assets/Scripts/World/EntityMarker.cs"
 "Assets/Scripts/World/InteractableState.cs"
 "Assets/Scripts/World/RoomVolume.cs"

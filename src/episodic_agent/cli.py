@@ -306,7 +306,7 @@ def run(
     )
     
     # Determine if Unity mode for enhanced output
-    is_unity = profile.lower() == "unity_cheat"
+    is_unity = profile.lower().startswith("unity")
     infinite_mode = steps == 0 and is_unity
     
     # Print header

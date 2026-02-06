@@ -302,10 +302,9 @@ class UnityWebSocketSensorProvider(SensorProvider):
                 # Check if we should stop
                 continue
             except TypeError as e:
-                # Handle websockets library version incompatibilities
-                # Some versions have issues with timeout parameter type
-                logger.warning(f"WebSocket type error (possible library version issue): {e}")
-                data_logger.error(f"[WS] TypeError in receive: {e}. Consider checking websockets library version.")
+                # TypeError during receive - log details and retry
+                logger.warning(f"WebSocket receive TypeError: {e}")
+                data_logger.error(f"[WS] TypeError in receive: {e}")
                 # Try to continue without explicit timeout
                 try:
                     message = await ws.recv()
@@ -432,8 +431,17 @@ class UnityWebSocketSensorProvider(SensorProvider):
         should only be updated through sensor observations and user input,
         never through hardcoded IDs or labels.
         """
-        # Parse timestamp
-        timestamp = datetime.fromtimestamp(data.get("timestamp", time.time()))
+        # Parse timestamp - Unity sends ISO 8601 string, but also handle Unix float
+        timestamp_val = data.get("timestamp")
+        if isinstance(timestamp_val, str):
+            try:
+                timestamp = datetime.fromisoformat(timestamp_val)
+            except (ValueError, TypeError):
+                timestamp = datetime.now()
+        elif isinstance(timestamp_val, (int, float)):
+            timestamp = datetime.fromtimestamp(timestamp_val)
+        else:
+            timestamp = datetime.now()
         
         # Extract camera pose for raw_data
         camera_pose = data.get("camera_pose", data.get("camera", {}))

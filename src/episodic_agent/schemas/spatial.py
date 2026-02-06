@@ -247,6 +247,85 @@ class SpatialRelation(BaseModel):
     model_config = {"frozen": False}
 
 
+class LocationFingerprint(BaseModel):
+    """Fingerprint for a discovered location boundary.
+    
+    Represents a spatial region discovered through perception-based
+    scene fingerprinting. Unlike cheat resolvers that use Unity GUIDs,
+    this schema captures what the agent *actually observes* at a location.
+    
+    ARCHITECTURAL INVARIANT: No predefined semantics. Location boundaries
+    are discovered from statistical regularities in the scene embedding
+    stream. Labels come from user interaction only.
+    """
+    
+    location_id: str = Field(
+        ..., 
+        description="Unique identifier for this discovered location",
+    )
+    
+    # Centroid fingerprint (average scene embedding across observations)
+    centroid_embedding: list[float] = Field(
+        default_factory=list,
+        description="Average scene embedding for this location (centroid)",
+    )
+    
+    # Observation statistics
+    observation_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of frames observed at this location",
+    )
+    embedding_variance: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Variance of scene embeddings (measures visual diversity)",
+    )
+    
+    # Transition tracking
+    transition_positions: list[tuple[float, float, float]] = Field(
+        default_factory=list,
+        description="Agent positions (raw) at detected transitions into/out of this location",
+    )
+    approximate_center: tuple[float, float, float] | None = Field(
+        default=None,
+        description="Approximate center of this region (internal use for relative coords)",
+    )
+    approximate_radius: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Approximate extent of this region in world units",
+    )
+    
+    # Entity co-occurrence (what entities have been seen here)
+    entity_guids_seen: list[str] = Field(
+        default_factory=list,
+        description="GUIDs of entities observed at this location",
+    )
+    entity_cooccurrence_counts: dict[str, int] = Field(
+        default_factory=dict,
+        description="Count of observations per entity at this location",
+    )
+    
+    # Timestamps
+    first_visited: datetime = Field(
+        default_factory=datetime.now,
+        description="When this location was first discovered",
+    )
+    last_visited: datetime = Field(
+        default_factory=datetime.now,
+        description="Last time this location was observed",
+    )
+    
+    # Forward-compatible extras
+    extras: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional fields for forward compatibility",
+    )
+    
+    model_config = {"frozen": False}
+
+
 class PositionObservation(BaseModel):
     """Raw position observation before conversion to relative coordinates.
     

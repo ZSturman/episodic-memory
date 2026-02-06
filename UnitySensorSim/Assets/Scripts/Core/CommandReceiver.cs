@@ -7,13 +7,15 @@ namespace EpisodicAgent.Core
 {
     /// <summary>
     /// Receives and processes commands from Python clients.
-    /// Supports teleportation, interactable toggling, ball manipulation, and world reset.
+    /// Supports teleportation, interactable toggling, ball manipulation,
+    /// world reset, and dynamic visualization overlays.
     /// </summary>
     public class CommandReceiver : MonoBehaviour
     {
         [Header("References")]
         [SerializeField] private WebSocketServer webSocketServer;
         [SerializeField] private WorldManager worldManager;
+        [SerializeField] private DynamicWorldBuilder dynamicWorldBuilder;
         [SerializeField] private Transform player;
         [SerializeField] private CharacterController playerController;  // For teleportation
 
@@ -35,6 +37,11 @@ namespace EpisodicAgent.Core
             if (worldManager == null)
             {
                 worldManager = FindFirstObjectByType<WorldManager>();
+            }
+
+            if (dynamicWorldBuilder == null)
+            {
+                dynamicWorldBuilder = FindFirstObjectByType<DynamicWorldBuilder>();
             }
         }
 
@@ -99,6 +106,22 @@ namespace EpisodicAgent.Core
 
                     case CommandTypes.GET_WORLD_STATE:
                         return HandleGetWorldState(command);
+
+                    // Dynamic visualization commands
+                    case CommandTypes.CREATE_ROOM_VOLUME:
+                        return HandleCreateRoomVolume(command);
+
+                    case CommandTypes.UPDATE_ROOM_VOLUME:
+                        return HandleUpdateRoomVolume(command);
+
+                    case CommandTypes.REMOVE_ROOM_VOLUME:
+                        return HandleRemoveRoomVolume(command);
+
+                    case CommandTypes.SET_ENTITY_LABEL:
+                        return HandleSetEntityLabel(command);
+
+                    case CommandTypes.CLEAR_DYNAMIC_VOLUMES:
+                        return HandleClearDynamicVolumes(command);
 
                     default:
                         return CommandResponse.Error(command.command_id, 
@@ -287,6 +310,96 @@ namespace EpisodicAgent.Core
 
             string json = JsonUtility.ToJson(response);
             webSocketServer.Broadcast(json);
+        }
+
+        // =================================================================
+        // Dynamic visualization command handlers
+        // =================================================================
+
+        private CommandResponse HandleCreateRoomVolume(CommandMessage command)
+        {
+            if (dynamicWorldBuilder == null)
+                return CommandResponse.Error(command.command_id, "DynamicWorldBuilder not available");
+
+            var p = command.parameters;
+            if (p == null || string.IsNullOrEmpty(p.location_id))
+                return CommandResponse.Error(command.command_id, "Missing location_id");
+
+            Vector3 center = p.center != null ? p.center.ToVector3() : Vector3.zero;
+            Vector3 extent = p.extent != null ? p.extent.ToVector3() : Vector3.one;
+            string label = p.label ?? p.location_id;
+
+            Color? color = null;
+            if (!string.IsNullOrEmpty(p.color))
+                color = DynamicWorldBuilder.ParseHexColor(p.color, Color.cyan);
+
+            float opacity = p.opacity > 0 ? p.opacity : 0.15f;
+
+            bool ok = dynamicWorldBuilder.CreateVolume(p.location_id, label, center, extent, color, opacity);
+            return ok
+                ? CommandResponse.Success(command.command_id)
+                : CommandResponse.Error(command.command_id, "Failed to create volume");
+        }
+
+        private CommandResponse HandleUpdateRoomVolume(CommandMessage command)
+        {
+            if (dynamicWorldBuilder == null)
+                return CommandResponse.Error(command.command_id, "DynamicWorldBuilder not available");
+
+            var p = command.parameters;
+            if (p == null || string.IsNullOrEmpty(p.location_id))
+                return CommandResponse.Error(command.command_id, "Missing location_id");
+
+            Vector3? center = p.center != null ? p.center.ToVector3() : null;
+            Vector3? extent = p.extent != null ? p.extent.ToVector3() : null;
+            Color? color = !string.IsNullOrEmpty(p.color)
+                ? DynamicWorldBuilder.ParseHexColor(p.color, Color.cyan)
+                : null;
+            float? opacity = p.opacity > 0 ? p.opacity : null;
+
+            bool ok = dynamicWorldBuilder.UpdateVolume(p.location_id, p.label, center, extent, color, opacity);
+            return ok
+                ? CommandResponse.Success(command.command_id)
+                : CommandResponse.Error(command.command_id, $"Volume not found: {p.location_id}");
+        }
+
+        private CommandResponse HandleRemoveRoomVolume(CommandMessage command)
+        {
+            if (dynamicWorldBuilder == null)
+                return CommandResponse.Error(command.command_id, "DynamicWorldBuilder not available");
+
+            var p = command.parameters;
+            if (p == null || string.IsNullOrEmpty(p.location_id))
+                return CommandResponse.Error(command.command_id, "Missing location_id");
+
+            bool ok = dynamicWorldBuilder.RemoveVolume(p.location_id);
+            return ok
+                ? CommandResponse.Success(command.command_id)
+                : CommandResponse.Error(command.command_id, $"Volume not found: {p.location_id}");
+        }
+
+        private CommandResponse HandleSetEntityLabel(CommandMessage command)
+        {
+            if (dynamicWorldBuilder == null)
+                return CommandResponse.Error(command.command_id, "DynamicWorldBuilder not available");
+
+            var p = command.parameters;
+            if (p == null || string.IsNullOrEmpty(p.entity_guid) || string.IsNullOrEmpty(p.label))
+                return CommandResponse.Error(command.command_id, "Missing entity_guid or label");
+
+            bool ok = dynamicWorldBuilder.SetEntityLabel(p.entity_guid, p.label);
+            return ok
+                ? CommandResponse.Success(command.command_id)
+                : CommandResponse.Error(command.command_id, $"Entity not found: {p.entity_guid}");
+        }
+
+        private CommandResponse HandleClearDynamicVolumes(CommandMessage command)
+        {
+            if (dynamicWorldBuilder == null)
+                return CommandResponse.Error(command.command_id, "DynamicWorldBuilder not available");
+
+            dynamicWorldBuilder.ClearAllVolumes();
+            return CommandResponse.Success(command.command_id);
         }
     }
 }

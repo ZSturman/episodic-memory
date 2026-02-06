@@ -210,6 +210,7 @@ class LocationResolver(ABC):
 |-------|--------|-------------|
 | `StubLocationResolver` | `modules.stubs` | Returns "unknown" |
 | `LocationResolverCheat` | `modules.unity.resolvers` | Uses Unity room GUID |
+| `LocationResolverReal` | `modules.spatial_resolver` | Fingerprint-based (sensor-agnostic) |
 
 ---
 
@@ -239,6 +240,7 @@ class EntityResolver(ABC):
 |-------|--------|-------------|
 | `StubEntityResolver` | `modules.stubs` | Returns empty list |
 | `EntityResolverCheat` | `modules.unity.resolvers` | Uses Unity entity GUIDs |
+| `EntityResolverReal` | `modules.entity_resolver_real` | Embedding similarity (sensor-agnostic) |
 
 ---
 

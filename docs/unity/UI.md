@@ -4,6 +4,8 @@ This document describes the UI architecture for the Unity sensor simulator.
 
 > **ARCHITECTURAL INVARIANT:** Unity is stateless. UI displays only what backend sends. Unity does NOT interpret, cache, or modify labels.
 
+> **STATUS:** The classes in this document (`StatusBarUI`, `EntityLabelUI`, `LabelRequestModal`, `UIMessageHandler`, `EntityLabelManager`) are **planned but not yet implemented** in the Unity project. The `DynamicWorldBuilder` component (in `World/DynamicWorldBuilder.cs`) provides runtime label and volume visualization now. The UI system described here is the target design for a full in-game HUD.
+
 ---
 
 ## UI Overview

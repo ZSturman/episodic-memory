@@ -99,43 +99,42 @@ Streamed at configurable rate (default 10 Hz).
 {
   "protocol_version": "1.0.0",
   "frame_id": 42,
-  "timestamp": 1704067200.123,
-  "camera_pose": {
+  "timestamp": "2024-01-01T12:00:00.1230000Z",
+  "camera": {
     "position": { "x": 2.5, "y": 1.6, "z": -3.2 },
-    "rotation": { "x": 15.0, "y": 45.0, "z": 0.0 },
-    "forward": { "x": 0.65, "y": -0.26, "z": 0.71 }
+    "forward": { "x": 0.65, "y": -0.26, "z": 0.71 },
+    "up": { "x": 0.0, "y": 1.0, "z": 0.0 },
+    "yaw": 45.0,
+    "pitch": 15.0
   },
-  "current_room": "room-living-001",
-  "current_room_label": "Living Room",
+  "current_room_guid": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
   "entities": [
     {
       "guid": "door-front-001",
-      "label": "Front Door",
-      "category": "door",
       "position": { "x": 0.0, "y": 1.0, "z": 5.0 },
-      "state": "Closed",
-      "visible": true,
+      "size": { "x": 1.0, "y": 2.0, "z": 0.1 },
       "distance": 4.2,
-      "interactable": true
+      "is_visible": true,
+      "interactable_type": "toggle",
+      "interactable_state": "closed"
     },
     {
       "guid": "lamp-table-001",
-      "label": "Table Lamp",
-      "category": "furniture",
       "position": { "x": 3.0, "y": 0.8, "z": 2.0 },
-      "state": "Off",
-      "visible": true,
+      "size": { "x": 0.3, "y": 0.5, "z": 0.3 },
       "distance": 2.1,
-      "interactable": true
+      "is_visible": true,
+      "interactable_type": "toggle",
+      "interactable_state": "off"
     }
   ],
   "state_changes": [
     {
       "entity_guid": "door-front-001",
-      "entity_label": "Front Door",
-      "old_state": "Closed",
-      "new_state": "Open",
-      "timestamp": 1704067200.100
+      "change_type": "state_changed",
+      "old_value": "closed",
+      "new_value": "open",
+      "timestamp": "2024-01-01T12:00:00.1000000Z"
     }
   ]
 }
@@ -147,11 +146,10 @@ Streamed at configurable rate (default 10 Hz).
 |-------|------|-------------|
 | `protocol_version` | string | Protocol version for compatibility |
 | `frame_id` | int | Monotonically increasing frame counter |
-| `timestamp` | float | Unix timestamp (seconds) |
-| `camera_pose` | object | Player camera position and orientation |
-| `current_room` | string | GUID of room player is in |
-| `current_room_label` | string | Human label of room (if known) |
-| `entities` | array | Visible entities in scene |
+| `timestamp` | string | ISO 8601 timestamp (e.g., `"2024-01-01T12:00:00.1230000Z"`) |
+| `camera` | object | Player camera pose (position, forward, up, yaw, pitch) |
+| `current_room_guid` | string | GUID of room player is in (no label — backend owns labels) |
+| `entities` | array | Entities in scene |
 | `state_changes` | array | State changes since last frame |
 
 #### Entity Object
@@ -159,23 +157,24 @@ Streamed at configurable rate (default 10 Hz).
 | Field | Type | Description |
 |-------|------|-------------|
 | `guid` | string | Unique identifier (stable across frames) |
-| `label` | string | Human-readable label |
-| `category` | string | Entity category (door, furniture, etc.) |
-| `position` | object | World position {x, y, z} |
-| `state` | string | Current state (Open/Closed, On/Off) |
-| `visible` | bool | Whether currently visible to camera |
+| `position` | object | Agent-relative position {x, y, z} |
+| `size` | object | Approximate bounding box size {x, y, z} |
 | `distance` | float | Distance from player (meters) |
-| `interactable` | bool | Whether entity can be interacted with |
+| `is_visible` | bool | Whether currently visible to camera |
+| `interactable_type` | string/null | `"toggle"`, `"moveable"`, or `null` |
+| `interactable_state` | string/null | Current state (e.g., `"open"`, `"closed"`, `"on"`, `"off"`) |
+
+> **Note:** `label` and `category` are intentionally absent. The backend discovers and assigns all semantic labels through user interaction. Unity only sends observable properties.
 
 #### State Change Object
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `entity_guid` | string | Entity that changed |
-| `entity_label` | string | Entity label |
-| `old_state` | string | Previous state |
-| `new_state` | string | New state |
-| `timestamp` | float | When change occurred |
+| `change_type` | string | Type of change (`"state_changed"`, `"spawned"`, `"despawned"`, `"moved"`) |
+| `old_value` | string | Previous value |
+| `new_value` | string | New value |
+| `timestamp` | string | ISO 8601 timestamp |
 
 ### 2. Commands (Python → Unity)
 
@@ -282,6 +281,82 @@ Request full world state.
 {
   "command": "get_world_state",
   "command_id": "cmd-007",
+  "parameters": {}
+}
+```
+
+##### create_room_volume
+
+Create a visualization volume in Unity for a backend-discovered location boundary. This is purely a visualization overlay — it does NOT affect the sensor stream.
+
+```json
+{
+  "command": "create_room_volume",
+  "command_id": "cmd-008",
+  "parameters": {
+    "location_id": "loc_fp_abc123",
+    "label": "kitchen",
+    "center": { "x": 15.0, "y": 2.0, "z": 0.0 },
+    "extent": { "x": 4.0, "y": 2.0, "z": 4.0 },
+    "color": "#4488FF",
+    "opacity": 0.15
+  }
+}
+```
+
+##### update_room_volume
+
+Update an existing visualization volume.
+
+```json
+{
+  "command": "update_room_volume",
+  "command_id": "cmd-009",
+  "parameters": {
+    "location_id": "loc_fp_abc123",
+    "label": "kitchen (updated)",
+    "extent": { "x": 5.0, "y": 2.0, "z": 5.0 }
+  }
+}
+```
+
+##### remove_room_volume
+
+Remove a specific visualization volume.
+
+```json
+{
+  "command": "remove_room_volume",
+  "command_id": "cmd-010",
+  "parameters": {
+    "location_id": "loc_fp_abc123"
+  }
+}
+```
+
+##### set_entity_label
+
+Set a floating label on an entity (visualization only — the backend's learned label).
+
+```json
+{
+  "command": "set_entity_label",
+  "command_id": "cmd-011",
+  "parameters": {
+    "entity_guid": "lamp-table-001",
+    "label": "table lamp"
+  }
+}
+```
+
+##### clear_dynamic_volumes
+
+Remove all dynamic visualization volumes.
+
+```json
+{
+  "command": "clear_dynamic_volumes",
+  "command_id": "cmd-012",
   "parameters": {}
 }
 ```
@@ -613,7 +688,7 @@ async def sensor_client():
             "command": "teleport_player",
             "command_id": "cmd-001",
             "parameters": {
-                "room_guid": "room-kitchen-001"
+                "room_guid": "a1b2c3d4-5678-90ab-cdef-1234567890ab"
             }
         }
         await ws.send(json.dumps(command))
@@ -625,9 +700,9 @@ async def sensor_client():
             
             if "frame_id" in data:
                 # Sensor frame
-                print(f"Frame {data['frame_id']}: {data['current_room_label']}")
+                print(f"Frame {data['frame_id']}: room_guid={data.get('current_room_guid', 'none')}")
                 for entity in data.get('entities', []):
-                    print(f"  - {entity['label']}: {entity['state']}")
+                    print(f"  - GUID={entity['guid']}: state={entity.get('interactable_state')}")
                     
             elif "command_id" in data:
                 # Command response

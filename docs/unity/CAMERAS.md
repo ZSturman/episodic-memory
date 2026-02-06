@@ -4,6 +4,8 @@ This document describes the three-camera architecture for the Unity sensor simul
 
 > **ARCHITECTURAL INVARIANT:** Only the Sensor Camera stream goes to the Python backend. Other cameras are for debugging and visualization only.
 
+> **STATUS:** The `CameraManager` class described in this document is **planned but not yet implemented**. Currently the scene uses a single camera on the Player object. The multi-camera system is the target design for enhanced debugging/visualization.
+
 ---
 
 ## Camera Overview

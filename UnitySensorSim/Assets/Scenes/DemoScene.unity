@@ -150,7 +150,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::EpisodicAgent.World.RoomVolume
   roomGuid: 9b20c775-c752-4a72-a685-c0aa18295417
-  label: 
   gizmoColor: {r: 0, g: 1, b: 0, a: 0.25}
   spawnPoint: {fileID: 0}
 --- !u!65 &8993749
@@ -724,8 +723,8 @@ BoxCollider:
   m_ProvidesContacts: 0
   m_Enabled: 1
   serializedVersion: 3
-  m_Size: {x: 1, y: 1, z: 1}
-  m_Center: {x: 0, y: 0, z: 0}
+  m_Size: {x: 1, y: 1, z: 0.8812461}
+  m_Center: {x: 0, y: 0, z: -0.059376955}
 --- !u!23 &462520651
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -1393,8 +1392,8 @@ BoxCollider:
   m_ProvidesContacts: 0
   m_Enabled: 1
   serializedVersion: 3
-  m_Size: {x: 1, y: 1, z: 1}
-  m_Center: {x: 0, y: 0, z: 0}
+  m_Size: {x: 1, y: 1, z: 0.8584368}
+  m_Center: {x: 0, y: 0, z: 0.07078159}
 --- !u!23 &1252403418
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -1463,7 +1462,6 @@ GameObject:
   - component: {fileID: 1360063560}
   - component: {fileID: 1360063563}
   - component: {fileID: 1360063562}
-  - component: {fileID: 1360063561}
   m_Layer: 0
   m_Name: Wall_Living_East_Top
   m_TagString: Untagged
@@ -1486,27 +1484,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 1122340097}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!65 &1360063561
-BoxCollider:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1360063559}
-  m_Material: {fileID: 0}
-  m_IncludeLayers:
-    serializedVersion: 2
-    m_Bits: 0
-  m_ExcludeLayers:
-    serializedVersion: 2
-    m_Bits: 0
-  m_LayerOverridePriority: 0
-  m_IsTrigger: 0
-  m_ProvidesContacts: 0
-  m_Enabled: 1
-  serializedVersion: 3
-  m_Size: {x: 1, y: 1, z: 1}
-  m_Center: {x: 0, y: 0, z: 0}
 --- !u!23 &1360063562
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -2342,7 +2319,7 @@ GameObject:
   - component: {fileID: 2100909309}
   - component: {fileID: 2100909308}
   m_Layer: 0
-  m_Name: Gamemanager
+  m_Name: GameManager
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -2363,7 +2340,7 @@ MonoBehaviour:
   playerTransform: {fileID: 1488550143}
   playerCamera: {fileID: 2115707710}
   ballPrefab: {fileID: 0}
-  debugLogging: 0
+  debugLogging: 1
 --- !u!114 &2100909309
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2378,6 +2355,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::EpisodicAgent.Core.CommandReceiver
   webSocketServer: {fileID: 0}
   worldManager: {fileID: 0}
+  dynamicWorldBuilder: {fileID: 0}
   player: {fileID: 0}
   playerController: {fileID: 0}
 --- !u!114 &2100909310
@@ -2550,7 +2528,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::EpisodicAgent.World.RoomVolume
   roomGuid: 1a49c2da-bb90-446b-b028-32738bf9f578
-  label: 
   gizmoColor: {r: 0, g: 1, b: 0, a: 0.25}
   spawnPoint: {fileID: 0}
 --- !u!65 &2138020300

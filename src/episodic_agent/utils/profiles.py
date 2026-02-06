@@ -33,8 +33,8 @@ class ProfileName(str, Enum):
     STUB = "stub"           # All stub modules for testing
     UNITY_CHEAT = "unity_cheat"  # Unity with cheat perception
     UNITY_FULL = "unity_full"    # Full features with memory retrieval and event prediction
+    UNITY_SPATIAL = "unity_spatial"  # Unity with real spatial discovery (no GUIDs)
     # Future profiles:
-    # UNITY_REAL = "unity_real"  # Unity with real perception
     # FILE_REPLAY = "file_replay"  # Replay from recorded data
 
 
@@ -142,11 +142,49 @@ UNITY_FULL_PROFILE = ProfileConfig(
 )
 
 
+UNITY_SPATIAL_PROFILE = ProfileConfig(
+    name="unity_spatial",
+    description="Unity with real spatial discovery — no GUIDs, fingerprint-based location/entity resolution",
+    sensor_provider="UnityWebSocketSensorProvider",
+    perception="PerceptionUnityCheat",  # Still uses cheat perception for embeddings
+    acf_builder="StubACFBuilder",
+    location_resolver="LocationResolverReal",
+    entity_resolver="EntityResolverReal",
+    event_resolver="EventResolverStateChange",
+    retriever="SpreadingActivationRetriever",
+    boundary_detector="HysteresisBoundaryDetector",
+    dialog_manager="CLIDialogManager",
+    episode_store="PersistentEpisodeStore",
+    graph_store="LabeledGraphStore",
+    parameters={
+        "ws_url": "ws://localhost:8765",
+        "auto_label_locations": False,
+        "auto_label_entities": True,
+        "use_persistent_storage": True,
+        # Fingerprint-based location resolution
+        "transition_threshold": 0.40,
+        "hysteresis_frames": 5,
+        "match_threshold": 0.35,
+        # Entity matching
+        "entity_match_threshold": 0.80,
+        # Spreading activation
+        "spreading_decay": 0.85,
+        "spreading_max_hops": 3,
+        "spreading_min_activation": 0.1,
+        "spreading_top_k": 5,
+        # Hysteresis boundary
+        "boundary_high_threshold": 0.7,
+        "boundary_prediction_error_threshold": 0.6,
+    },
+)
+
+
 # Profile registry
 PROFILES: dict[str, ProfileConfig] = {
     "stub": STUB_PROFILE,
     "unity_cheat": UNITY_CHEAT_PROFILE,
     "unity_full": UNITY_FULL_PROFILE,
+    "unity_spatial": UNITY_SPATIAL_PROFILE,
 }
 
 
@@ -334,6 +372,17 @@ class ModuleFactory:
                 auto_label=self.params.get("auto_label_locations", False),
             )
         
+        elif name == "LocationResolverReal":
+            from episodic_agent.modules.spatial_resolver import LocationResolverReal
+            return LocationResolverReal(
+                graph_store=graph_store,
+                dialog_manager=dialog_manager,
+                transition_threshold=self.params.get("transition_threshold", 0.40),
+                hysteresis_frames=self.params.get("hysteresis_frames", 5),
+                match_threshold=self.params.get("match_threshold", 0.35),
+                auto_label=self.params.get("auto_label_locations", False),
+            )
+        
         raise ValueError(f"Unknown location resolver: {name}")
 
     def _create_entity_resolver(
@@ -356,6 +405,17 @@ class ModuleFactory:
                 dialog_manager=dialog_manager,
                 location_resolver=location_resolver,
                 auto_label=self.params.get("auto_label_entities", True),
+            )
+        
+        elif name == "EntityResolverReal":
+            from episodic_agent.modules.entity_resolver_real import EntityResolverReal
+            return EntityResolverReal(
+                graph_store=graph_store,
+                dialog_manager=dialog_manager,
+                location_resolver=location_resolver,
+                match_threshold=self.params.get("entity_match_threshold", 0.80),
+                auto_label=self.params.get("auto_label_entities", True),
+                prompt_for_new=self.params.get("prompt_for_new_entities", False),
             )
         
         raise ValueError(f"Unknown entity resolver: {name}")

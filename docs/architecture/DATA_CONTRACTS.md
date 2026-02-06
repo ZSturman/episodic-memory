@@ -116,19 +116,21 @@ A recognized object/entity.
 class ObjectCandidate(BaseModel):
     """A recognized object candidate."""
     
-    candidate_id: str                  # Unique identifier (often GUID)
-    label: str                         # Object label
-    confidence: float = 1.0            # Recognition confidence [0, 1]
-    embedding: list[float] = []        # Object embedding vector
+    candidate_id: str                  # Unique identifier
+    label: str = "unknown"             # Best-guess label
+    labels: list[str] = []             # Alternative label candidates
+    confidence: float = 0.0            # Recognition confidence [0, 1]
+    embedding: list[float] | None = None   # Vector embedding for similarity
     position: tuple[float, float, float] | None = None  # 3D position
+    bounding_box: dict[str, float] | None = None  # Bounding box coords
+    conflict_id: str | None = None     # Label conflict reference
     extras: dict[str, Any] = {}        # Forward compatibility
 
-# Common extras:
-# - guid: str (Unity GUID)
-# - category: str (door, furniture, etc.)
-# - state: str (Open, Closed, On, Off)
-# - visible: bool
+# Common extras (sensor-specific, NOT semantic):
+# - interactable_state: str (Open, Closed, On, Off)
+# - is_visible: bool
 # - distance: float
+# NOTE: labels come from users via LabelRequest, not from sensors.
 ```
 
 **Location**: `schemas/frames.py`
@@ -254,31 +256,30 @@ class EventCandidate(BaseModel):
 A node in the associative memory graph.
 
 ```python
-class NodeType(str, Enum):
-    """Types of graph nodes."""
-    
-    LOCATION = "location"
-    ENTITY = "entity"
-    EVENT = "event"
-    CONCEPT = "concept"
+# Node types are string constants defined in schemas/graph.py:
+# LOCATION, ENTITY, EVENT, EPISODE, CONCEPT
 
 
 class GraphNode(BaseModel):
-    """A node in the graph store."""
+    """A node in the associative graph memory.
+    
+    ARCHITECTURAL INVARIANT: node_type is structural, not semantic.
+    Semantic meaning is stored in label/labels fields, learned from user.
+    """
     
     node_id: str                       # Unique identifier
-    node_type: NodeType                # Type of node
-    label: str                         # Human-readable label
-    embedding: list[float] = []        # Optional embedding vector
-    properties: dict[str, Any] = {}    # Node-specific properties
+    node_type: str                     # Structural type (location/entity/event/concept)
+    label: str = "unknown"             # Primary label (learned from user)
+    labels: list[str] = []             # Alternative/hierarchical labels
+    embedding: list[float] | None = None  # Vector embedding for similarity
+    activation: float = 0.0            # Current activation level
+    base_activation: float = 0.0       # Base-level activation (recency/frequency)
     created_at: datetime               # Creation time
-    updated_at: datetime               # Last update time
+    last_accessed: datetime            # Last activation time
+    access_count: int = 0              # Times this node has been accessed
+    source_id: str | None = None       # Source object reference
+    confidence: float = 0.0            # Confidence in node identity
     extras: dict[str, Any] = {}        # Forward compatibility
-
-# Common properties by type:
-# - location: guid, room_label
-# - entity: guid, category, typical_state
-# - event: event_type, pattern_count
 ```
 
 **Location**: `schemas/graph.py`
@@ -290,27 +291,28 @@ class GraphNode(BaseModel):
 An edge connecting nodes in the graph.
 
 ```python
-class EdgeType(str, Enum):
-    """Types of graph edges."""
-    
-    TYPICAL_IN = "typical_in"          # Entity typically in location
-    RELATED_TO = "related_to"          # General relation
-    CAUSED_BY = "caused_by"            # Causal relation
-    PART_OF = "part_of"                # Compositional
-    CO_OCCURS = "co_occurs"            # Temporal co-occurrence
+# Edge types are string constants, not an enum.
+# Defined in schemas/graph.py as: TYPICAL_IN, RELATED_TO, CAUSED_BY,
+# PART_OF, CO_OCCURS, TRIGGERED_BY, OCCURRED_IN, ALIAS_OF, MERGED_INTO,
+# CONTAINS, OCCURRED_AT, SIMILAR_TO, TEMPORAL, CAUSAL
 
 
 class GraphEdge(BaseModel):
-    """An edge in the graph store."""
+    """An edge in the associative graph.
+    
+    ARCHITECTURAL INVARIANT: edge_type is structural, not semantic.
+    Salience weights are learned from experience, not predefined.
+    """
     
     edge_id: str                       # Unique identifier
-    edge_type: EdgeType                # Type of edge
-    source_id: str                     # Source node ID
-    target_id: str                     # Target node ID
-    weight: float = 1.0                # Edge weight/strength
-    properties: dict[str, Any] = {}    # Edge-specific properties
+    edge_type: str                     # Structural type of relationship
+    source_node_id: str                # Source node ID
+    target_node_id: str                # Target node ID
+    weight: float = 1.0                # Edge weight for activation spreading
+    confidence: float = 0.0            # Confidence in this relationship
+    salience: dict[str, float] = {}    # Per-cue-type salience weights
     created_at: datetime               # Creation time
-    updated_at: datetime               # Last update time
+    last_accessed: datetime            # Last traversal time
     extras: dict[str, Any] = {}        # Forward compatibility
 ```
 

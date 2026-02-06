@@ -294,15 +294,11 @@ Make rooms visually distinct:
 
 Objects the agent can detect, track, and potentially interact with. Each object needs an `EntityMarker` component for the agent to recognize it.
 
-#### Understanding EntityMarker Categories
+#### Understanding EntityMarker
 
-Common categories used by the agent:
-- `door` - Doors, gates, entryways
-- `furniture` - Tables, chairs, lamps, couches
-- `appliance` - Stoves, refrigerators, washing machines
-- `container` - Drawers, cabinets, boxes
-- `light` - Light sources
-- `decoration` - Pictures, plants, ornaments
+Each entity needs an `EntityMarker` component for the agent to recognize it. The marker only provides a stable GUID — all semantic labels and categories are discovered and assigned by the Python backend through user interaction.
+
+> **ARCHITECTURAL INVARIANT:** Do NOT set semantic labels in Unity. The `EntityMarker.Label` property is only the GameObject name (used internally for debugging). The backend learns all real labels from user interaction.
 
 #### 3.8.1 Create a Door
 
@@ -408,11 +404,11 @@ Entities
 
 #### 3.8.8 Tips for Creating Custom Objects
 
-- **Label** should be human-readable (e.g., "Kitchen Table" not "table_01")
-- **Category** should match one of the standard categories
-- **GUID** is auto-generated - don't set it manually
+- **GUID** is auto-generated — don't set it manually
 - Objects without `EntityMarker` won't be detected by the agent
 - Objects without `InteractableState` can be seen but not interacted with
+- Labels and categories are NOT set in Unity — the backend learns them from user interaction
+- The `EntityMarker.Label` property defaults to the GameObject name (debug use only)
 
 ### 3.9 Link References in WorldManager
 
@@ -502,7 +498,8 @@ UnitySensorSim/
 │   │   │   ├── RoomVolume.cs
 │   │   │   ├── EntityMarker.cs
 │   │   │   ├── InteractableState.cs
-│   │   │   └── WorldManager.cs
+│   │   │   ├── WorldManager.cs
+│   │   │   └── DynamicWorldBuilder.cs  # Runtime visualization overlays
 │   │   ├── Player/
 │   │   │   ├── FirstPersonController.cs
 │   │   │   └── PlayerInteraction.cs

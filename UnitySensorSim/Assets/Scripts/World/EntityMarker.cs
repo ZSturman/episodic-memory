@@ -25,6 +25,9 @@ namespace EpisodicAgent.World
 
         // Public accessors
         public string Guid => entityGuid;
+        // Expose a fallback label for editor/runtime convenience (semantic labels
+        // are owned by the backend; use the Unity object name as a neutral label).
+        public string Label => gameObject.name;
         // REMOVED: Label and Category properties - backend owns semantic meaning
 
         // Track last known transform for change detection
