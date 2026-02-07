@@ -2,9 +2,9 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "sensor_frame.schema.json",
   "title": "SensorFrame",
-  "description": "A single sensor frame streamed from Unity to Python containing world state snapshot",
+  "description": "A single sensor frame streamed from a client to the Python backend containing world state snapshot. This schema is client-agnostic.",
   "type": "object",
-  "required": ["protocol_version", "frame_id", "timestamp", "camera_pose", "current_room", "entities"],
+  "required": ["protocol_version", "frame_id", "timestamp"],
   "properties": {
     "protocol_version": {
       "type": "string",
@@ -18,19 +18,16 @@
       "minimum": 0
     },
     "timestamp": {
-      "type": "number",
-      "description": "Unix timestamp in seconds with millisecond precision"
+      "type": ["string", "number"],
+      "description": "Timestamp: ISO 8601 string or Unix timestamp in seconds"
     },
-    "camera_pose": {
-      "$ref": "#/definitions/CameraPose"
+    "camera": {
+      "$ref": "#/definitions/Camera",
+      "description": "Camera/player pose data"
     },
-    "current_room": {
+    "current_room_guid": {
       "type": ["string", "null"],
-      "description": "GUID of the room the player is currently in, or null if not in any room"
-    },
-    "current_room_label": {
-      "type": ["string", "null"],
-      "description": "Human-readable label of the current room"
+      "description": "GUID of the room the player is currently in, or empty/null if not in any room"
     },
     "entities": {
       "type": "array",
@@ -48,21 +45,30 @@
     }
   },
   "definitions": {
-    "CameraPose": {
+    "Camera": {
       "type": "object",
-      "description": "Player camera position and orientation",
-      "required": ["position", "rotation", "forward"],
+      "description": "Camera position and orientation",
+      "required": ["position", "forward"],
       "properties": {
         "position": {
-          "$ref": "#/definitions/Vector3"
-        },
-        "rotation": {
           "$ref": "#/definitions/Vector3",
-          "description": "Euler angles in degrees"
+          "description": "Camera world position"
         },
         "forward": {
           "$ref": "#/definitions/Vector3",
-          "description": "Forward direction vector"
+          "description": "Forward direction unit vector"
+        },
+        "up": {
+          "$ref": "#/definitions/Vector3",
+          "description": "Up direction unit vector"
+        },
+        "yaw": {
+          "type": "number",
+          "description": "Horizontal rotation in degrees"
+        },
+        "pitch": {
+          "type": "number",
+          "description": "Vertical rotation in degrees (-180..180)"
         }
       }
     },
@@ -78,43 +84,36 @@
     },
     "EntityData": {
       "type": "object",
-      "description": "Data for a single tracked entity",
-      "required": ["guid", "label", "category", "position"],
+      "description": "Data for a single tracked entity. Labels and categories are owned by the backend, not the client.",
+      "required": ["guid", "position"],
       "properties": {
         "guid": {
           "type": "string",
           "description": "Stable unique identifier for this entity"
         },
-        "label": {
-          "type": "string",
-          "description": "Human-readable name"
-        },
-        "category": {
-          "type": "string",
-          "description": "Entity category (e.g., furniture, door, item)"
-        },
         "position": {
-          "$ref": "#/definitions/Vector3"
-        },
-        "rotation": {
           "$ref": "#/definitions/Vector3",
-          "description": "Euler angles in degrees"
+          "description": "Entity position (world or agent-relative depending on implementation)"
         },
-        "state": {
-          "type": "string",
-          "description": "Current state for interactables (e.g., Open, Closed)"
-        },
-        "visible": {
-          "type": "boolean",
-          "description": "Whether entity is visible from player camera"
+        "size": {
+          "$ref": "#/definitions/Vector3",
+          "description": "Approximate bounding box size"
         },
         "distance": {
           "type": "number",
-          "description": "Distance from player in units"
+          "description": "Distance from camera in units"
         },
-        "room_guid": {
+        "is_visible": {
+          "type": "boolean",
+          "description": "Whether entity is visible from the camera"
+        },
+        "interactable_type": {
           "type": ["string", "null"],
-          "description": "GUID of the room this entity is in"
+          "description": "Interactable type: null, 'toggle', 'moveable'"
+        },
+        "interactable_state": {
+          "type": ["string", "null"],
+          "description": "Current state for interactables (e.g., 'open', 'closed', 'on', 'off')"
         }
       }
     },
@@ -129,8 +128,8 @@
         },
         "change_type": {
           "type": "string",
-          "description": "Type of change (e.g., state_changed, room_changed, spawned, despawned)",
-          "enum": ["state_changed", "room_changed", "spawned", "despawned"]
+          "description": "Type of change",
+          "enum": ["state_changed", "room_changed", "spawned", "despawned", "moved"]
         },
         "old_value": {
           "type": "string",
@@ -141,8 +140,8 @@
           "description": "New value"
         },
         "timestamp": {
-          "type": "number",
-          "description": "Unix timestamp when change occurred"
+          "type": ["string", "number"],
+          "description": "When the change occurred (ISO 8601 or Unix timestamp)"
         }
       }
     }

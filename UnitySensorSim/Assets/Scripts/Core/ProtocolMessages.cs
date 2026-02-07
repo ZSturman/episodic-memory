@@ -19,9 +19,10 @@ namespace EpisodicAgent.Protocol
     /// <summary>
     /// Complete sensor frame sent to the Python agent.
     /// 
-    /// ARCHITECTURAL INVARIANT: Unity does not include semantic labels.
-    /// All labels are owned by the Python backend and learned from user interaction.
-    /// This frame provides only observable properties: GUIDs, positions, states.
+    /// ARCHITECTURAL INVARIANT: Unity is the eyes, backend is the brain.
+    /// Unity sends only camera pose and room occupancy. It does NOT identify
+    /// entities — the backend discovers objects through the Visual Summary
+    /// Channel and learns labels from user interaction.
     /// </summary>
     [Serializable]
     public class SensorFrame
@@ -31,15 +32,13 @@ namespace EpisodicAgent.Protocol
         public int frame_id;
         public CameraPose camera;
         public string current_room_guid;
-        // REMOVED: current_room_label - backend owns all semantic labeling
-        public List<EntityData> entities;
-        public List<StateChangeEvent> state_changes;
+        // REMOVED: entities — backend discovers objects via Visual Summary Channel
+        // REMOVED: state_changes — backend detects changes from visual differences
+        // REMOVED: current_room_label — backend owns all semantic labeling
 
         public SensorFrame()
         {
             protocol_version = ProtocolVersion.VERSION;
-            entities = new List<EntityData>();
-            state_changes = new List<StateChangeEvent>();
         }
     }
 

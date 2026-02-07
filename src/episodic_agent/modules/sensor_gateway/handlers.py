@@ -138,6 +138,17 @@ class UnitySensorHandler(SensorHandler):
         
         processing_time = (time.perf_counter() - start_time) * 1000
         
+        # Wire-level debug logging for diagnosing sensor pipeline issues
+        if logger.isEnabledFor(logging.DEBUG):
+            pos = location.position if location else None
+            fwd = location.forward_vector if location else None
+            logger.debug(
+                f"[{sensor_id}] frame_id={frame_id} "
+                f"pos={pos} fwd={fwd} "
+                f"room_id={location.room_id if location else None} "
+                f"entities={len(entities)} events={len(events)}"
+            )
+        
         return SensorMessage(
             message_id=message_id,
             timestamp=timestamp,
@@ -200,9 +211,15 @@ class UnitySensorHandler(SensorHandler):
         # Room confidence is high if we have explicit room GUID from Unity
         room_confidence = 0.95 if room_id else 0.0
         
+        # Position confidence: high if we have a non-zero position (indicating
+        # the sensor is actually providing camera data), lower if all zeros
+        # (which may indicate a null/uninitialized camera reference)
+        position_is_valid = position and any(abs(v) > 1e-6 for v in position)
+        position_confidence = 0.99 if position_is_valid else 0.1
+        
         return LocationContext(
             position=position,
-            position_confidence=0.99 if position else 0.0,  # Unity positions are accurate
+            position_confidence=position_confidence,
             rotation=rotation,
             forward_vector=forward,
             room_id=room_id,

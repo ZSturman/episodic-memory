@@ -1,36 +1,35 @@
 using System;
-using System.Collections.Generic;
 using UnityEngine;
 using EpisodicAgent.Protocol;
 using EpisodicAgent.World;
+using EpisodicAgent.Player;
 
 namespace EpisodicAgent.Core
 {
     /// <summary>
     /// Streams sensor frames to connected Python clients at a configurable rate.
-    /// Collects data from RoomVolumes, EntityMarkers, and InteractableStates.
-    /// 
-    /// ARCHITECTURAL INVARIANT: All positions are agent-relative.
-    /// No absolute world coordinates cross the wire.
+    /// Sends camera pose (world position + orientation) and current room occupancy.
+    /// ARCHITECTURAL INVARIANT: Unity = eyes, backend = brain.
+    /// Entity discovery happens through the Visual Summary Channel (port 8767),
+    /// NOT through pre-identified object lists.
     /// </summary>
     public class SensorStreamer : MonoBehaviour
     {
         [Header("Streaming Configuration")]
         [SerializeField] private float targetFrameRate = 10f;  // Frames per second
         [SerializeField] private bool streamWhenConnected = true;
-        [SerializeField] private bool includeAllEntities = true;  // Cheat mode: include even non-visible entities
-
         [Header("References")]
         [SerializeField] private WebSocketServer webSocketServer;
         [SerializeField] private Transform playerCamera;
         [SerializeField] private WorldManager worldManager;
 
+        [Header("Debug")]
+        [SerializeField] private bool debugLogging = false;
+
         // State tracking
         private int _frameId = 0;
         private float _lastSendTime;
         private float _sendInterval;
-        private List<StateChangeEvent> _pendingStateChanges = new List<StateChangeEvent>();
-        private Dictionary<string, string> _lastEntityStates = new Dictionary<string, string>();
 
         // Public properties
         public int LastFrameId => _frameId;
@@ -39,6 +38,8 @@ namespace EpisodicAgent.Core
 
         // Events
         public event Action<int> OnFrameSent;
+        /// <summary>Fires with the raw JSON string right before it is broadcast. Useful for debugging.</summary>
+        public event Action<string> OnFrameJsonSent;
 
         private void Start()
         {
@@ -55,19 +56,42 @@ namespace EpisodicAgent.Core
                 worldManager = FindFirstObjectByType<WorldManager>();
             }
 
-            // Subscribe to interactable state changes
-            if (worldManager != null)
+            // Auto-discover playerCamera if not wired in Inspector
+            if (playerCamera == null)
             {
-                worldManager.OnEntityStateChanged += HandleEntityStateChangedWrapper;
+                Camera mainCam = Camera.main;
+                if (mainCam != null)
+                {
+                    playerCamera = mainCam.transform;
+                    Debug.Log($"[SensorStreamer] Auto-discovered playerCamera from Camera.main: {playerCamera.name}");
+                }
+            }
+
+            if (playerCamera == null)
+            {
+                // Try to find a FirstPersonController's camera as fallback
+                var fpc = FindFirstObjectByType<EpisodicAgent.Player.FirstPersonController>();
+                if (fpc != null)
+                {
+                    Camera cam = fpc.GetComponentInChildren<Camera>();
+                    if (cam != null)
+                    {
+                        playerCamera = cam.transform;
+                        Debug.Log($"[SensorStreamer] Auto-discovered playerCamera from FirstPersonController: {playerCamera.name}");
+                    }
+                }
+            }
+
+            if (playerCamera == null)
+            {
+                Debug.LogWarning("[SensorStreamer] playerCamera is NULL — all camera data will be default. " +
+                    "Assign the player camera in the Inspector or ensure Camera.main exists.");
             }
         }
 
         private void OnDestroy()
         {
-            if (worldManager != null)
-            {
-                worldManager.OnEntityStateChanged -= HandleEntityStateChangedWrapper;
-            }
+            // No subscriptions to clean up — entity tracking removed
         }
 
         private void Update()
@@ -97,10 +121,24 @@ namespace EpisodicAgent.Core
 
             SensorFrame frame = BuildSensorFrame();
             string json = JsonUtility.ToJson(frame);
+
+            // Wire-level debug: log what is actually being serialized and sent
+            if (debugLogging)
+            {
+                var cam = frame.camera;
+                Debug.Log($"[SensorStreamer] SEND frame_id={frame.frame_id} " +
+                    $"pos=({cam.position.x:F2},{cam.position.y:F2},{cam.position.z:F2}) " +
+                    $"fwd=({cam.forward.x:F2},{cam.forward.y:F2},{cam.forward.z:F2}) " +
+                    $"yaw={cam.yaw:F1} pitch={cam.pitch:F1} " +
+                    $"room={frame.current_room_guid} " +
+                    $"bytes={json.Length}");
+            }
+
+            OnFrameJsonSent?.Invoke(json);
+
             webSocketServer.Broadcast(json);
 
             _frameId++;
-            _pendingStateChanges.Clear();
 
             OnFrameSent?.Invoke(_frameId);
         }
@@ -114,9 +152,10 @@ namespace EpisodicAgent.Core
                 frame_id = _frameId,
                 camera = BuildCameraPose(),
                 current_room_guid = GetCurrentRoomGuid(),
-                // REMOVED: current_room_label - backend owns all semantic labeling
-                entities = BuildEntityList(),
-                state_changes = new List<StateChangeEvent>(_pendingStateChanges)
+                // ARCHITECTURAL INVARIANT: Unity = eyes, backend = brain.
+                // Entities are NOT sent from Unity. The backend discovers objects
+                // through the Visual Summary Channel (port 8767) and learns labels
+                // from user interaction. Only camera pose + room occupancy are sent.
             };
 
             return frame;
@@ -128,8 +167,6 @@ namespace EpisodicAgent.Core
             {
                 return new CameraPose
                 {
-                    // ARCHITECTURAL INVARIANT: Positions are agent-relative
-                    // With no player, position is origin (self-relative = 0,0,0)
                     position = new Vector3Data(Vector3.zero),
                     forward = new Vector3Data(Vector3.forward),
                     up = new Vector3Data(Vector3.up),
@@ -140,11 +177,9 @@ namespace EpisodicAgent.Core
 
             Vector3 euler = playerCamera.eulerAngles;
             
-            // ARCHITECTURAL INVARIANT: Camera pose is always at relative origin
-            // The agent IS the origin of the coordinate system
             return new CameraPose
             {
-                position = new Vector3Data(Vector3.zero),  // Agent is always at origin
+                position = new Vector3Data(playerCamera.position),
                 forward = new Vector3Data(playerCamera.forward),
                 up = new Vector3Data(playerCamera.up),
                 yaw = euler.y,
@@ -159,152 +194,10 @@ namespace EpisodicAgent.Core
             return room != null ? room.Guid : "";
         }
 
-        // REMOVED: GetCurrentRoomLabel() - backend owns all semantic labeling
-        // Room names are learned from user interaction, not sent from Unity.
-
-        private List<EntityData> BuildEntityList()
-        {
-            var entities = new List<EntityData>();
-
-            if (worldManager == null) return entities;
-
-            // Get agent position for relative coordinate calculation
-            Vector3 agentPosition = playerCamera != null ? playerCamera.position : Vector3.zero;
-            Vector3 agentForward = playerCamera != null ? playerCamera.forward : Vector3.forward;
-
-            foreach (var marker in worldManager.Entities)
-            {
-                if (marker == null) continue;
-
-                bool isVisible = IsEntityVisible(marker);
-                
-                if (!includeAllEntities && !isVisible)
-                    continue;
-
-                // ARCHITECTURAL INVARIANT: All positions are agent-relative
-                // Transform world position to agent-relative coordinates
-                Vector3 worldPos = marker.transform.position;
-                Vector3 relativePos = worldPos - agentPosition;
-                
-                // Compute distance (always positive)
-                float distance = relativePos.magnitude;
-
-                var entityData = new EntityData
-                {
-                    guid = marker.Guid,
-                    // REMOVED: label and category - backend owns all semantic labeling
-                    position = new Vector3Data(relativePos),  // Agent-relative position
-                    size = new Vector3Data(GetEntitySize(marker)),
-                    distance = distance,
-                    is_visible = isVisible,
-                    interactable_type = GetInteractableType(marker),
-                    interactable_state = GetInteractableState(marker)
-                };
-
-                entities.Add(entityData);
-
-                // Track state for change detection
-                string currentState = entityData.interactable_state ?? "";
-                string lastState;
-                if (_lastEntityStates.TryGetValue(marker.Guid, out lastState))
-                {
-                    if (currentState != lastState)
-                    {
-                        // State changed - already captured via event
-                    }
-                }
-                _lastEntityStates[marker.Guid] = currentState;
-            }
-
-            return entities;
-        }
-
-        private Vector3 GetEntitySize(EntityMarker marker)
-        {
-            // Try to get size from renderer bounds
-            Renderer renderer = marker.GetComponent<Renderer>();
-            if (renderer != null)
-            {
-                return renderer.bounds.size;
-            }
-
-            // Try to get size from collider
-            Collider collider = marker.GetComponent<Collider>();
-            if (collider != null)
-            {
-                return collider.bounds.size;
-            }
-
-            // Default size
-            return Vector3.one;
-        }
-
-        private bool IsEntityVisible(EntityMarker marker)
-        {
-            if (playerCamera == null) return true;
-
-            // Simple visibility check using viewport
-            Camera cam = playerCamera.GetComponent<Camera>();
-            if (cam == null) cam = Camera.main;
-            if (cam == null) return true;
-
-            Vector3 viewportPoint = cam.WorldToViewportPoint(marker.transform.position);
-            
-            // Check if in viewport
-            if (viewportPoint.z < 0 || viewportPoint.x < 0 || viewportPoint.x > 1 ||
-                viewportPoint.y < 0 || viewportPoint.y > 1)
-            {
-                return false;
-            }
-
-            // Optional: raycast check for occlusion
-            Vector3 direction = marker.transform.position - playerCamera.position;
-            RaycastHit hit;
-            if (Physics.Raycast(playerCamera.position, direction, out hit, direction.magnitude))
-            {
-                // Check if we hit the entity or something closer
-                if (hit.transform != marker.transform && 
-                    !hit.transform.IsChildOf(marker.transform))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private string GetInteractableType(EntityMarker marker)
-        {
-            var interactable = marker.GetComponent<InteractableState>();
-            if (interactable == null) return null;
-            return interactable.Type.ToString().ToLower();
-        }
-
-        private string GetInteractableState(EntityMarker marker)
-        {
-            var interactable = marker.GetComponent<InteractableState>();
-            if (interactable == null) return null;
-            return interactable.CurrentState;
-        }
-
-        private void HandleEntityStateChangedWrapper(EntityMarker marker, string oldState, string newState)
-        {
-            if (marker == null) return;
-            HandleEntityStateChanged(marker.Guid, oldState, newState);
-        }
-
-        private void HandleEntityStateChanged(string entityGuid, string oldState, string newState)
-        {
-            var change = new StateChangeEvent
-            {
-                entity_guid = entityGuid,
-                change_type = "state_changed",
-                old_value = oldState,
-                new_value = newState,
-                timestamp = DateTime.UtcNow.ToString("o")
-            };
-            _pendingStateChanges.Add(change);
-        }
+        // REMOVED: Entity methods (BuildEntityList, GetEntitySize, IsEntityVisible,
+        // GetInteractableType, GetInteractableState, HandleEntityStateChanged).
+        // ARCHITECTURAL INVARIANT: Unity = eyes, backend = brain.
+        // The backend discovers entities through the Visual Summary Channel (port 8767).
 
         /// <summary>
         /// Get the target streaming frame rate.

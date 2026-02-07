@@ -21,6 +21,10 @@ namespace EpisodicAgent.Core
 
         // Events for external handling
         public event Action<string, bool, string> OnCommandProcessed;  // command_id, success, error
+        /// <summary>Fires with the raw JSON string of every incoming command. Useful for debugging.</summary>
+        public event Action<string> OnCommandJsonReceived;
+        /// <summary>Fires with the raw JSON string of every outgoing response. Useful for debugging.</summary>
+        public event Action<string> OnResponseJsonSent;
 
         private void Start()
         {
@@ -73,6 +77,8 @@ namespace EpisodicAgent.Core
             }
 
             Debug.Log($"[CommandReceiver] Processing command: {command.command} (id: {command.command_id})");
+
+            OnCommandJsonReceived?.Invoke(json);
 
             CommandResponse response = ProcessCommand(command);
             SendResponse(response);
@@ -309,6 +315,9 @@ namespace EpisodicAgent.Core
             if (webSocketServer == null) return;
 
             string json = JsonUtility.ToJson(response);
+
+            OnResponseJsonSent?.Invoke(json);
+
             webSocketServer.Broadcast(json);
         }
 

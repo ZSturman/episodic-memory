@@ -2318,6 +2318,10 @@ GameObject:
   - component: {fileID: 2100909310}
   - component: {fileID: 2100909309}
   - component: {fileID: 2100909308}
+  - component: {fileID: 2100909313}
+  - component: {fileID: 2100909316}
+  - component: {fileID: 2100909315}
+  - component: {fileID: 2100909314}
   m_Layer: 0
   m_Name: GameManager
   m_TagString: Untagged
@@ -2339,6 +2343,11 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::EpisodicAgent.World.WorldManager
   playerTransform: {fileID: 1488550143}
   playerCamera: {fileID: 2115707710}
+  autoDiscoverEntities: 0
+  minEntityVolume: 0.01
+  autoDiscoverExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
   ballPrefab: {fileID: 0}
   debugLogging: 1
 --- !u!114 &2100909309
@@ -2372,10 +2381,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::EpisodicAgent.Core.SensorStreamer
   targetFrameRate: 10
   streamWhenConnected: 1
-  includeAllEntities: 1
   webSocketServer: {fileID: 0}
   playerCamera: {fileID: 0}
   worldManager: {fileID: 0}
+  debugLogging: 0
 --- !u!114 &2100909311
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2405,6 +2414,80 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &2100909313
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2100909307}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a1b2c3d4e5f647a8b9c0d1e2f3a4b5c6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EpisodicAgent.Core.ProtocolLogger
+  sensorStreamer: {fileID: 0}
+  commandReceiver: {fileID: 0}
+  verbosity: 1
+  toggleVerbosityKey: 283
+  logToFile: 0
+  toggleFileKey: 284
+  logFileName: protocol_traffic.jsonl
+--- !u!114 &2100909314
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2100909307}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5b6266b2d5d17477ea522d8007b8511f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EpisodicAgent.Core.VisualSummaryServer
+  port: 8767
+  autoStart: 1
+  targetHz: 5
+  streamWhenConnected: 1
+  featureExtractor: {fileID: 0}
+  debugLogging: 0
+--- !u!114 &2100909315
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2100909307}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 47478f6760bd44f01a8da51d46bf0a1e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EpisodicAgent.Core.VisualFeatureExtractor
+  captureWidth: 256
+  captureHeight: 256
+  debugLogging: 0
+--- !u!114 &2100909316
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2100909307}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b2c3d4e5f6a748b9c0d1e2f3a4b5c6d7, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EpisodicAgent.UI.ProtocolLogHUD
+  protocolLogger: {fileID: 0}
+  showPanel: 0
+  toggleKey: 285
+  maxEntries: 40
+  panelWidth: 700
+  panelHeight: 500
+  fontSize: 12
+  showSensorFrames: 1
+  showCommands: 1
+  showResponses: 1
 --- !u!1 &2115707707
 GameObject:
   m_ObjectHideFlags: 0

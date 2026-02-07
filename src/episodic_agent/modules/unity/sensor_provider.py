@@ -25,6 +25,16 @@ try:
 except ImportError:
     GATEWAY_AVAILABLE = False
 
+# Optional visual channel integration
+try:
+    from episodic_agent.modules.sensor_gateway.visual_client import (
+        VisualStreamClient,
+        create_visual_client,
+    )
+    VISUAL_AVAILABLE = True
+except ImportError:
+    VISUAL_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 # Separate logger for detailed data logging (can be enabled independently)
@@ -37,7 +47,7 @@ EXPECTED_PROTOCOL_VERSION = "1.0.0"
 REQUIRED_FIELDS = ["protocol_version", "frame_id", "timestamp"]
 # Optional fields that enhance the frame but aren't required for basic operation
 # REMOVED: current_room_label - backend owns all semantic labels, Unity only sends GUIDs
-OPTIONAL_FIELDS = ["current_room", "current_room_guid", "entities", "camera_pose"]
+OPTIONAL_FIELDS = ["current_room", "current_room_guid", "entities", "camera", "camera_pose"]
 
 
 class ConnectionState:
@@ -77,6 +87,9 @@ class UnityWebSocketSensorProvider(SensorProvider):
         use_gateway: bool = True,  # Enable gateway validation
         log_raw_data: bool = False,  # Log raw Unity data for debugging
         on_validation_error: Callable[[str], None] | None = None,  # Error callback
+        enable_visual_channel: bool = True,  # Enable Visual Summary Channel (port 8767)
+        visual_host: str = "localhost",
+        visual_port: int = 8767,
     ) -> None:
         """Initialize the Unity WebSocket sensor provider.
         
@@ -141,6 +154,21 @@ class UnityWebSocketSensorProvider(SensorProvider):
         # Data logging state
         self._frames_logged = 0
         self._validation_errors = 0
+
+        # Visual Summary Channel (port 8767)
+        # ARCHITECTURAL INVARIANT: Unity = eyes, backend = brain.
+        # The visual channel provides bandwidth-efficient 4×4 grid summaries
+        # that the backend uses for entity discovery and scene understanding.
+        self._visual_client: VisualStreamClient | None = None
+        self._enable_visual_channel = enable_visual_channel
+        if enable_visual_channel and VISUAL_AVAILABLE:
+            self._visual_client = create_visual_client(
+                host=visual_host,
+                port=visual_port,
+            )
+            logger.info(f"Visual channel client created (ws://{visual_host}:{visual_port})")
+        elif enable_visual_channel and not VISUAL_AVAILABLE:
+            logger.warning("Visual channel requested but visual_client module not available")
 
     @property
     def state(self) -> str:
@@ -250,6 +278,11 @@ class UnityWebSocketSensorProvider(SensorProvider):
             self._set_state(ConnectionState.DISCONNECTED)
             return
         
+        # Start visual channel connection as a background task
+        visual_task = None
+        if self._visual_client:
+            visual_task = asyncio.create_task(self._visual_connect_loop())
+        
         attempt = 0
         
         while self._running and not self._stop_event.is_set():
@@ -317,6 +350,43 @@ class UnityWebSocketSensorProvider(SensorProvider):
                 # Log the actual exception type for debugging
                 data_logger.debug(f"Receive exception details: {type(e).__name__}: {e}")
                 break
+
+    async def _visual_connect_loop(self) -> None:
+        """Background task: connect to visual channel with reconnection.
+        
+        Runs alongside the main sensor WebSocket in the same asyncio loop.
+        Visual channel is non-critical — if it fails, sensor frames continue.
+        """
+        while self._running and not self._stop_event.is_set():
+            try:
+                connected = await self._visual_client.connect()
+                if connected:
+                    logger.info("[VISUAL] Visual channel connected")
+                    # _receive_loop inside connect() runs until disconnection
+                    # When it ends, we reconnect
+                    while self._visual_client.is_connected and self._running:
+                        await asyncio.sleep(0.5)
+                else:
+                    logger.debug("[VISUAL] Visual channel connection failed, retrying...")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug(f"[VISUAL] Visual channel error: {e}")
+            
+            if self._running and not self._stop_event.is_set():
+                await asyncio.sleep(self._reconnect_delay)
+        
+        # Cleanup
+        if self._visual_client and self._visual_client.is_connected:
+            try:
+                await self._visual_client.disconnect()
+            except Exception:
+                pass
+
+    @property
+    def visual_client(self) -> "VisualStreamClient | None":
+        """Get the visual stream client (if enabled)."""
+        return self._visual_client
 
     def _handle_message(self, message: str) -> None:
         """Parse and validate a received message, queue the frame.
@@ -586,6 +656,10 @@ class UnityWebSocketSensorProvider(SensorProvider):
                 "total_errors": gateway_stats.get("total_errors", 0),
                 "error_rate": gateway_stats.get("error_rate", 0.0),
             }
+        
+        # Add visual channel stats
+        if self._visual_client:
+            status["visual_channel"] = self._visual_client.get_statistics()
         
         return status
 

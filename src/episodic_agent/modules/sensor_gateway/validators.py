@@ -193,7 +193,7 @@ class UnityValidator(SensorValidator):
     EXPECTED_PROTOCOL = "1.0.0"
     REQUIRED_FIELDS = ["protocol_version", "frame_id", "timestamp"]
     # REMOVED: current_room_label - backend owns all semantic labels
-    OPTIONAL_FIELDS = ["camera_pose", "current_room", "current_room_guid", 
+    OPTIONAL_FIELDS = ["camera", "camera_pose", "current_room", "current_room_guid", 
                        "entities", "state_changes"]
     
     @property
@@ -304,19 +304,19 @@ class UnityValidator(SensorValidator):
                         actual=timestamp,
                     ))
         
-        # Validate camera_pose structure
-        if "camera_pose" in data and data["camera_pose"]:
-            camera_pose = data["camera_pose"]
-            if isinstance(camera_pose, dict):
-                self._validate_camera_pose(camera_pose, errors)
+        # Validate camera structure (accept both "camera" and "camera_pose" field names)
+        camera_data = data.get("camera") or data.get("camera_pose")
+        if camera_data:
+            if isinstance(camera_data, dict):
+                self._validate_camera_pose(camera_data, errors)
             else:
                 errors.append(ValidationError(
                     code="INVALID_TYPE",
-                    message="camera_pose must be an object",
+                    message="camera must be an object",
                     severity=ValidationSeverity.WARNING,
-                    field_path="camera_pose",
-                    expected="object with position, rotation, forward",
-                    actual=type(camera_pose).__name__,
+                    field_path="camera",
+                    expected="object with position, forward, up, yaw, pitch",
+                    actual=type(camera_data).__name__,
                 ))
         
         # Validate entities
@@ -379,7 +379,7 @@ class UnityValidator(SensorValidator):
         errors: list[ValidationError],
     ) -> None:
         """Validate camera pose structure."""
-        for vector_name in ["position", "rotation", "forward"]:
+        for vector_name in ["position", "forward", "up"]:
             if vector_name in pose:
                 vector = pose[vector_name]
                 if isinstance(vector, dict):
@@ -387,19 +387,30 @@ class UnityValidator(SensorValidator):
                         if axis not in vector:
                             errors.append(ValidationError(
                                 code="MISSING_AXIS",
-                                message=f"camera_pose.{vector_name} missing '{axis}' axis",
+                                message=f"camera.{vector_name} missing '{axis}' axis",
                                 severity=ValidationSeverity.WARNING,
-                                field_path=f"camera_pose.{vector_name}.{axis}",
+                                field_path=f"camera.{vector_name}.{axis}",
                             ))
                         elif not isinstance(vector.get(axis), (int, float)):
                             errors.append(ValidationError(
                                 code="INVALID_AXIS_TYPE",
-                                message=f"camera_pose.{vector_name}.{axis} must be a number",
+                                message=f"camera.{vector_name}.{axis} must be a number",
                                 severity=ValidationSeverity.WARNING,
-                                field_path=f"camera_pose.{vector_name}.{axis}",
+                                field_path=f"camera.{vector_name}.{axis}",
                                 expected="number",
                                 actual=type(vector.get(axis)).__name__,
                             ))
+        # Validate scalar fields
+        for scalar in ["yaw", "pitch"]:
+            if scalar in pose and not isinstance(pose[scalar], (int, float)):
+                errors.append(ValidationError(
+                    code="INVALID_TYPE",
+                    message=f"camera.{scalar} must be a number",
+                    severity=ValidationSeverity.WARNING,
+                    field_path=f"camera.{scalar}",
+                    expected="number",
+                    actual=type(pose[scalar]).__name__,
+                ))
     
     def _validate_entity(
         self,

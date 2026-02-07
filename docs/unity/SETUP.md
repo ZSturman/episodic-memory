@@ -72,6 +72,8 @@ The GameManager coordinates all sensor streaming.
    - Search for and add: `CommandReceiver`
    - Click **Add Component** again
    - Search for and add: `WorldManager`
+   - Click **Add Component** again
+   - Search for and add: `ProtocolLogger`
 
 ### 3.3 Configure WebSocket Server
 
@@ -493,7 +495,8 @@ UnitySensorSim/
 │   │   │   ├── WebSocketServer.cs
 │   │   │   ├── SensorStreamer.cs
 │   │   │   ├── CommandReceiver.cs
-│   │   │   └── ProtocolMessages.cs
+│   │   │   ├── ProtocolMessages.cs
+│   │   │   └── ProtocolLogger.cs    # Traffic logger (console + file)
 │   │   ├── World/
 │   │   │   ├── RoomVolume.cs
 │   │   │   ├── EntityMarker.cs
@@ -504,14 +507,153 @@ UnitySensorSim/
 │   │   │   ├── FirstPersonController.cs
 │   │   │   └── PlayerInteraction.cs
 │   │   └── UI/
-│   │       └── ConnectionHUD.cs
+│   │       ├── ConnectionHUD.cs
+│   │       └── ProtocolLogHUD.cs    # In-game traffic overlay
 │   └── Prefabs/               # Optional prefabs
 ├── protocol/
 │   ├── sensor_frame_schema.json
 │   └── command_schema.json
 └── python_client/
-    └── sensor_client.py        # Example Python client
+    └── sensor_client.py        # Example Python client (supports --dump-json)
 ```
+
+## Step 6: Debugging Protocol Traffic
+
+When something looks wrong, you need to compare the exact JSON being sent by Unity with what the Python backend receives. This section covers every way to inspect protocol traffic.
+
+> **ARCHITECTURAL NOTE:** All debugging tools described here live on the Unity side (or the standalone Python test-client). The Python backend is completely unaware of them.
+
+### 6.1 Unity-Side: ProtocolLogger (Console + File)
+
+The `ProtocolLogger` component (added to GameManager in Step 3.2) logs every message that crosses the WebSocket in either direction.
+
+#### Runtime Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| **F2** | Cycle console verbosity: **Off → Headers → Full JSON** |
+| **F3** | Toggle file logging on/off |
+
+#### Console Verbosity Levels
+
+| Level | What You See in Unity Console |
+|-------|-------------------------------|
+| **Off** | Nothing (silent) |
+| **Headers** | `[Protocol >>>] SENSOR_FRAME (1842 bytes)` |
+| **Full** | `[Protocol >>>] SENSOR_FRAME` followed by pretty-printed JSON |
+
+#### Inspector Settings
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| Verbosity | Headers | Starting console verbosity |
+| Log To File | off | Write JSONL traffic log on disk |
+| Log File Name | `protocol_traffic.jsonl` | Path (relative to `Application.persistentDataPath`) |
+
+#### File Log Format
+
+When file logging is on, each line is a JSON object:
+
+```json
+{"ts":"2026-02-06T01:00:00.123Z","dir":"OUT","cat":"SENSOR_FRAME","msg":{...}}
+{"ts":"2026-02-06T01:00:00.200Z","dir":"IN","cat":"COMMAND","msg":{...}}
+{"ts":"2026-02-06T01:00:00.205Z","dir":"OUT","cat":"CMD_RESPONSE","msg":{...}}
+```
+
+- `dir` — `"OUT"` = Unity → Client, `"IN"` = Client → Unity
+- `cat` — `SENSOR_FRAME`, `COMMAND`, or `CMD_RESPONSE`
+- `msg` — The full JSON payload
+
+**Find the log file:**
+- **macOS**: `~/Library/Application Support/DefaultCompany/UnitySensorSim/protocol_traffic.jsonl`
+- **Windows**: `%USERPROFILE%\AppData\LocalLow\DefaultCompany\UnitySensorSim\protocol_traffic.jsonl`
+
+You can view the latest traffic with:
+
+```bash
+# Tail the file in real time
+tail -f ~/Library/Application\ Support/DefaultCompany/UnitySensorSim/protocol_traffic.jsonl
+
+# Pretty-print the last entry
+tail -1 ~/Library/Application\ Support/DefaultCompany/UnitySensorSim/protocol_traffic.jsonl | python3 -m json.tool
+```
+
+### 6.2 Unity-Side: ProtocolLogHUD (In-Game Overlay)
+
+For visual, in-game inspection, add the `ProtocolLogHUD` component to any GameObject (e.g. the same GameManager or a dedicated `DebugUI` object).
+
+1. Select **GameManager** (or create a separate `DebugUI` empty)
+2. **Add Component** → `ProtocolLogHUD`
+3. It auto-detects the `ProtocolLogger` if present
+
+#### Runtime Shortcuts
+
+| Key | Action |
+|-----|--------|
+| **F4** | Toggle the traffic overlay panel |
+
+#### Overlay Features
+
+- Scrollable list of recent messages (last 40 by default)
+- **Green** = outgoing (Unity → Client), **Orange** = incoming (Client → Unity)
+- Click **►** next to any entry to expand and view full JSON
+- Filter buttons: **Frames** / **Cmds** / **Resp** — toggle each category on/off
+- **Clear** button to reset the log
+- **⇓/⇑** button to toggle auto-scroll
+
+### 6.3 Python Test-Client: --dump-json
+
+The standalone test client at `UnitySensorSim/python_client/sensor_client.py` supports raw JSON dumping:
+
+```bash
+# Print every raw JSON message to stdout
+python UnitySensorSim/python_client/sensor_client.py --dump-json
+
+# Also write traffic to a JSONL file for later comparison
+python UnitySensorSim/python_client/sensor_client.py --dump-json --log-file /tmp/client_traffic.jsonl
+
+# Combine with verbose mode for full context
+python UnitySensorSim/python_client/sensor_client.py --dump-json --verbose
+```
+
+The `--log-file` output uses the same JSONL format as Unity's `ProtocolLogger`, making it easy to diff:
+
+```bash
+# Compare Unity-side vs client-side logs
+diff <(jq -c '.msg' ~/Library/Application\ Support/DefaultCompany/UnitySensorSim/protocol_traffic.jsonl) \
+     <(jq -c '.msg' /tmp/client_traffic.jsonl)
+```
+
+### 6.4 Side-by-Side Comparison Workflow
+
+To compare exactly what Unity sends with what the client receives:
+
+1. **In Unity:** Press **F3** to start file logging (or enable **Log To File** in Inspector)
+2. **In a terminal:** Start the Python test-client with logging:
+   ```bash
+   python UnitySensorSim/python_client/sensor_client.py --dump-json --log-file /tmp/client_traffic.jsonl
+   ```
+3. **Play the scene** and perform some actions (walk, interact)
+4. **Stop** the Python client (Ctrl+C) and stop Unity Play mode
+5. **Compare** the logs:
+   ```bash
+   # Extract just sensor frames from Unity's log
+   grep '"cat":"SENSOR_FRAME"' ~/Library/Application\ Support/DefaultCompany/UnitySensorSim/protocol_traffic.jsonl \
+     | head -3 | python3 -m json.tool
+
+   # Extract just sensor frames from client log
+   grep '"cat":"SENSOR_FRAME"' /tmp/client_traffic.jsonl \
+     | head -3 | python3 -m json.tool
+   ```
+
+### 6.5 Quick Sanity Check (No File Logging)
+
+If you just want a quick look without files:
+
+1. In Unity, press **F2** twice to set verbosity to **Full**
+2. Open the Unity **Console** window (**Window → General → Console**)
+3. Every sensor frame and command will be printed as pretty JSON
+4. Alternatively, press **F4** to open the in-game overlay and click entries to expand them
 
 ## Troubleshooting
 
@@ -552,6 +694,7 @@ If components like `WebSocketServer` don't appear:
 ## Next Steps
 
 - See [Protocol Documentation](PROTOCOL.md) for message format details
+- See [Step 6: Debugging Protocol Traffic](#step-6-debugging-protocol-traffic) for inspecting raw data
 - Read [Troubleshooting Guide](../TROUBLESHOOTING.md) for more solutions
 - Try [Custom Scenarios](../scenarios/CUSTOM.md) for advanced testing
 

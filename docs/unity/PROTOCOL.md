@@ -107,38 +107,14 @@ Streamed at configurable rate (default 10 Hz).
     "yaw": 45.0,
     "pitch": 15.0
   },
-  "current_room_guid": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
-  "entities": [
-    {
-      "guid": "door-front-001",
-      "position": { "x": 0.0, "y": 1.0, "z": 5.0 },
-      "size": { "x": 1.0, "y": 2.0, "z": 0.1 },
-      "distance": 4.2,
-      "is_visible": true,
-      "interactable_type": "toggle",
-      "interactable_state": "closed"
-    },
-    {
-      "guid": "lamp-table-001",
-      "position": { "x": 3.0, "y": 0.8, "z": 2.0 },
-      "size": { "x": 0.3, "y": 0.5, "z": 0.3 },
-      "distance": 2.1,
-      "is_visible": true,
-      "interactable_type": "toggle",
-      "interactable_state": "off"
-    }
-  ],
-  "state_changes": [
-    {
-      "entity_guid": "door-front-001",
-      "change_type": "state_changed",
-      "old_value": "closed",
-      "new_value": "open",
-      "timestamp": "2024-01-01T12:00:00.1000000Z"
-    }
-  ]
+  "current_room_guid": "a1b2c3d4-5678-90ab-cdef-1234567890ab"
 }
 ```
+
+> **ARCHITECTURAL INVARIANT:** Sensor frames contain only camera pose and room occupancy.
+> Entities and state changes are **NOT** included — the backend discovers objects through
+> the Visual Summary Channel (port 8767) and learns labels from user interaction.
+> Unity is the eyes; the backend is the brain.
 
 #### Field Descriptions
 
@@ -149,32 +125,10 @@ Streamed at configurable rate (default 10 Hz).
 | `timestamp` | string | ISO 8601 timestamp (e.g., `"2024-01-01T12:00:00.1230000Z"`) |
 | `camera` | object | Player camera pose (position, forward, up, yaw, pitch) |
 | `current_room_guid` | string | GUID of room player is in (no label — backend owns labels) |
-| `entities` | array | Entities in scene |
-| `state_changes` | array | State changes since last frame |
 
-#### Entity Object
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `guid` | string | Unique identifier (stable across frames) |
-| `position` | object | Agent-relative position {x, y, z} |
-| `size` | object | Approximate bounding box size {x, y, z} |
-| `distance` | float | Distance from player (meters) |
-| `is_visible` | bool | Whether currently visible to camera |
-| `interactable_type` | string/null | `"toggle"`, `"moveable"`, or `null` |
-| `interactable_state` | string/null | Current state (e.g., `"open"`, `"closed"`, `"on"`, `"off"`) |
-
-> **Note:** `label` and `category` are intentionally absent. The backend discovers and assigns all semantic labels through user interaction. Unity only sends observable properties.
-
-#### State Change Object
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `entity_guid` | string | Entity that changed |
-| `change_type` | string | Type of change (`"state_changed"`, `"spawned"`, `"despawned"`, `"moved"`) |
-| `old_value` | string | Previous value |
-| `new_value` | string | New value |
-| `timestamp` | string | ISO 8601 timestamp |
+> **Removed Fields:** `entities` and `state_changes` were removed. Unity no longer
+> pre-identifies objects. The backend discovers entities through visual features
+> and tracks state changes through visual differences.
 
 ### 2. Commands (Python → Unity)
 
@@ -756,6 +710,10 @@ The Python agent handles reconnection:
 
 **ARCHITECTURAL INVARIANT: Bandwidth-Efficient Sensing**
 
+> **Implementation Status:** Fully implemented.
+> - Unity: `VisualSummaryServer.cs` (WebSocket server) + `VisualFeatureExtractor.cs` (RenderTexture capture, 4×4 grid feature extraction)
+> - Python: `VisualStreamClient` in `visual_client.py` (auto-starts alongside sensor provider)
+
 The visual summary channel provides bandwidth-efficient visual context without raw image streaming.
 This design enables deployment on bandwidth-constrained real-world systems.
 
@@ -898,3 +856,18 @@ Python maintains a fixed-size ring buffer (~50MB) for recent high-res frames:
 3. **Memory Budget**: Fixed ring buffer prevents unbounded memory growth
 4. **Feature Extraction**: Python extracts and stores features, discards raw pixels
 5. **Attention-Driven**: Saliency-based attention guides focus requests
+
+---
+
+## Debugging Protocol Traffic
+
+To inspect the exact JSON crossing the wire, see [SETUP.md — Step 6: Debugging Protocol Traffic](SETUP.md#step-6-debugging-protocol-traffic).
+
+**Quick reference:**
+
+| Tool | Where | Toggle | What it shows |
+|------|-------|--------|---------------|
+| `ProtocolLogger` | Unity Console + file | **F2** (verbosity), **F3** (file) | Every message with direction + category |
+| `ProtocolLogHUD` | Unity in-game overlay | **F4** | Scrollable, filterable, expandable traffic list |
+| `sensor_client.py --dump-json` | Terminal | CLI flag | Raw JSON on stdout with timestamps |
+| `sensor_client.py --log-file` | JSONL file | CLI flag | Same format as Unity's `ProtocolLogger` for easy diff |

@@ -40,15 +40,21 @@ class Vector3:
 class CameraPose:
     """Camera position and orientation."""
     position: Vector3
-    rotation: Vector3
     forward: Vector3
+    up: Vector3
+    yaw: float = 0.0
+    pitch: float = 0.0
+    rotation: Optional[Vector3] = None  # Legacy compat
     
     @classmethod
     def from_dict(cls, d: dict) -> "CameraPose":
         return cls(
             position=Vector3.from_dict(d.get("position", {})),
-            rotation=Vector3.from_dict(d.get("rotation", {})),
-            forward=Vector3.from_dict(d.get("forward", {}))
+            forward=Vector3.from_dict(d.get("forward", {})),
+            up=Vector3.from_dict(d.get("up", {})),
+            yaw=d.get("yaw", 0.0),
+            pitch=d.get("pitch", 0.0),
+            rotation=Vector3.from_dict(d.get("rotation", {})) if d.get("rotation") else None
         )
 
 
@@ -118,8 +124,8 @@ class SensorFrame:
             protocol_version=d.get("protocol_version", "1.0.0"),
             frame_id=d.get("frame_id", 0),
             timestamp=d.get("timestamp", 0.0),
-            camera_pose=CameraPose.from_dict(d.get("camera_pose", {})),
-            current_room=d.get("current_room"),
+            camera_pose=CameraPose.from_dict(d.get("camera", d.get("camera_pose", {}))),
+            current_room=d.get("current_room_guid", d.get("current_room")),
             current_room_label=d.get("current_room_label"),
             entities=[EntityData.from_dict(e) for e in d.get("entities", [])],
             state_changes=[StateChange.from_dict(c) for c in d.get("state_changes", [])]
@@ -162,7 +168,8 @@ class SensorClient:
         on_frame: Optional[Callable[[SensorFrame], Any]] = None,
         on_response: Optional[Callable[[CommandResponse], Any]] = None,
         on_connect: Optional[Callable[[], Any]] = None,
-        on_disconnect: Optional[Callable[[], Any]] = None
+        on_disconnect: Optional[Callable[[], Any]] = None,
+        on_raw_message: Optional[Callable[[str], Any]] = None
     ):
         self.host = host
         self.port = port
@@ -172,6 +179,7 @@ class SensorClient:
         self.on_response = on_response
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
+        self.on_raw_message = on_raw_message
         
         self._websocket = None
         self._running = False
@@ -219,6 +227,10 @@ class SensorClient:
     
     async def _handle_message(self, message: str):
         """Handle incoming message."""
+        # Fire raw-message callback before parsing (for logging/debugging)
+        if self.on_raw_message:
+            await self._call_handler(self.on_raw_message, message)
+
         try:
             data = json.loads(message)
         except json.JSONDecodeError as e:
@@ -288,7 +300,13 @@ class SensorClient:
             self._pending_commands[command_id] = future
         
         # Send command
-        await self._websocket.send(json.dumps(message))
+        raw_json = json.dumps(message)
+
+        # Fire raw-message callback for outgoing commands too
+        if self.on_raw_message:
+            await self._call_handler(self.on_raw_message, f"__OUT__{raw_json}")
+
+        await self._websocket.send(raw_json)
         
         if not wait_response:
             return None
@@ -360,11 +378,41 @@ async def main():
     parser.add_argument("--host", default="localhost", help="Server host")
     parser.add_argument("--port", type=int, default=8765, help="Server port")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+    parser.add_argument(
+        "--dump-json",
+        action="store_true",
+        help="Print the raw JSON of every message received from Unity",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        default=None,
+        help="Write raw traffic to a JSONL file (one JSON object per line)",
+    )
     args = parser.parse_args()
+
+    log_fh = None
+    if args.log_file:
+        log_fh = open(args.log_file, "a")
+        print(f"📝 Logging traffic to {args.log_file}")
     
     frame_count = 0
     last_room = None
     
+    async def _dump(direction: str, category: str, raw: str):
+        """Write a traffic line to stdout and/or log file."""
+        import datetime as _dt
+        ts = _dt.datetime.utcnow().isoformat()
+        if args.dump_json:
+            arrow = ">>>" if direction == "OUT" else "<<<"
+            print(f"[{ts}] {arrow} {category}\n{raw}\n")
+        if log_fh is not None:
+            log_fh.write(
+                json.dumps({"ts": ts, "dir": direction, "cat": category, "msg": json.loads(raw)})
+                + "\n"
+            )
+            log_fh.flush()
+
     async def on_frame(frame: SensorFrame):
         nonlocal frame_count, last_room
         frame_count += 1
@@ -394,13 +442,32 @@ async def main():
     def on_disconnect():
         print("🔌 Disconnected")
     
+    async def on_raw_message(raw: str):
+        """Log every raw message received from or sent to Unity."""
+        # Outgoing commands are tagged with __OUT__ prefix by send_command
+        if raw.startswith("__OUT__"):
+            await _dump("OUT", "COMMAND", raw[7:])
+            return
+        # Determine category for logging
+        try:
+            peek = json.loads(raw)
+        except Exception:
+            peek = {}
+        if "frame_id" in peek:
+            await _dump("IN", "SENSOR_FRAME", raw)
+        elif "command_id" in peek:
+            await _dump("IN", "CMD_RESPONSE", raw)
+        else:
+            await _dump("IN", "UNKNOWN", raw)
+
     client = SensorClient(
         host=args.host,
         port=args.port,
         on_frame=on_frame,
         on_response=on_response,
         on_connect=on_connect,
-        on_disconnect=on_disconnect
+        on_disconnect=on_disconnect,
+        on_raw_message=on_raw_message
     )
     
     print(f"Connecting to ws://{args.host}:{args.port}...")
@@ -410,6 +477,9 @@ async def main():
     except KeyboardInterrupt:
         print("\nStopping...")
         client.stop()
+    finally:
+        if log_fh is not None:
+            log_fh.close()
 
 
 if __name__ == "__main__":

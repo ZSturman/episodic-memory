@@ -15,6 +15,14 @@ namespace EpisodicAgent.World
         [SerializeField] private Transform playerTransform;
         [SerializeField] private Camera playerCamera;
 
+        [Header("Entity Auto-Discovery (disabled by default)")]
+        [Tooltip("DISABLED: Auto-discovery violates architecture (Unity=eyes, backend=brain). Only manually placed EntityMarkers are tracked.")]
+        [SerializeField] private bool autoDiscoverEntities = false;
+        [Tooltip("Minimum renderer bounds volume to qualify for auto-discovery (filters tiny/invisible objects).")]
+        [SerializeField] private float minEntityVolume = 0.01f;
+        [Tooltip("Layers to exclude from auto-discovery (e.g. UI, Terrain, Water).")]
+        [SerializeField] private LayerMask autoDiscoverExcludeLayers;
+
         [Header("Spawnable Prefabs")]
         [SerializeField] private GameObject ballPrefab;
 
@@ -66,6 +74,25 @@ namespace EpisodicAgent.World
         {
             // Discover all rooms and entities in scene
             DiscoverWorldObjects();
+
+            // Validate scene setup — warn about common misconfigurations
+            if (rooms.Count == 0)
+            {
+                Debug.LogWarning("[WorldManager] No RoomVolume objects found in scene. " +
+                    "current_room_guid will always be empty. Add RoomVolume components to define spatial regions.");
+            }
+
+            if (playerTransform != null)
+            {
+                var cc = playerTransform.GetComponent<CharacterController>();
+                var col = playerTransform.GetComponent<Collider>();
+                bool hasTag = playerTransform.CompareTag("Player");
+                if (cc == null && col == null && !hasTag)
+                {
+                    Debug.LogWarning("[WorldManager] Player has no CharacterController, Collider, or 'Player' tag. " +
+                        "RoomVolume triggers will not detect the player.");
+                }
+            }
         }
 
         private void OnDestroy()
@@ -116,6 +143,12 @@ namespace EpisodicAgent.World
                 RegisterEntity(entity);
             }
 
+            // Auto-discover entities from scene Renderers if none were found
+            if (entities.Count == 0 && autoDiscoverEntities)
+            {
+                AutoDiscoverEntities();
+            }
+
             Debug.Log($"[WorldManager] Discovered {rooms.Count} rooms and {entities.Count} entities");
 
             // Determine initial room
@@ -137,6 +170,61 @@ namespace EpisodicAgent.World
             {
                 Debug.Log($"[WorldManager] Registered room: {room.Label}");
             }
+        }
+
+        /// <summary>
+        /// Auto-discover scene objects as entities when no EntityMarker components exist.
+        /// Finds Renderers in the scene and attaches EntityMarker to qualifying objects.
+        /// </summary>
+        private void AutoDiscoverEntities()
+        {
+            Renderer[] allRenderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+            int discovered = 0;
+
+            foreach (var renderer in allRenderers)
+            {
+                GameObject go = renderer.gameObject;
+
+                // Skip objects on excluded layers
+                if (autoDiscoverExcludeLayers != 0 &&
+                    ((1 << go.layer) & autoDiscoverExcludeLayers.value) != 0)
+                    continue;
+
+                // Skip if it already has an EntityMarker
+                if (go.GetComponent<EntityMarker>() != null)
+                    continue;
+
+                // Skip RoomVolume objects (they are regions, not entities)
+                if (go.GetComponent<RoomVolume>() != null)
+                    continue;
+
+                // Skip the player object
+                if (playerTransform != null &&
+                    (go.transform == playerTransform || go.transform.IsChildOf(playerTransform)))
+                    continue;
+
+                // Skip particle systems, trail renderers, line renderers
+                if (renderer is ParticleSystemRenderer || renderer is TrailRenderer || renderer is LineRenderer)
+                    continue;
+
+                // Skip objects that are too small (UI elements, decals, etc.)
+                Vector3 size = renderer.bounds.size;
+                float volume = size.x * size.y * size.z;
+                if (volume < minEntityVolume)
+                    continue;
+
+                // Attach EntityMarker — GUID is auto-generated in EntityMarker.Awake()
+                EntityMarker marker = go.AddComponent<EntityMarker>();
+                RegisterEntity(marker);
+                discovered++;
+
+                if (debugLogging)
+                {
+                    Debug.Log($"[WorldManager] Auto-discovered entity: {go.name} (vol={volume:F3})");
+                }
+            }
+
+            Debug.Log($"[WorldManager] Auto-discovered {discovered} entities from scene Renderers");
         }
 
         /// <summary>
