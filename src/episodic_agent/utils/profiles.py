@@ -34,6 +34,7 @@ class ProfileName(str, Enum):
     UNITY_CHEAT = "unity_cheat"  # Unity with cheat perception
     UNITY_FULL = "unity_full"    # Full features with memory retrieval and event prediction
     UNITY_SPATIAL = "unity_spatial"  # Unity with real spatial discovery (no GUIDs)
+    PANORAMA = "panorama"    # Panorama / video harness — no Unity, visual inference only
     # Future profiles:
     # FILE_REPLAY = "file_replay"  # Replay from recorded data
 
@@ -179,12 +180,55 @@ UNITY_SPATIAL_PROFILE = ProfileConfig(
 )
 
 
+PANORAMA_PROFILE = ProfileConfig(
+    name="panorama",
+    description="Panorama / video harness — visual inference from local images, no Unity",
+    sensor_provider="PanoramaSensorProvider",
+    perception="PanoramaPerception",
+    acf_builder="StubACFBuilder",
+    location_resolver="LocationResolverReal",
+    entity_resolver="EntityResolverReal",
+    event_resolver="StubEventResolver",
+    retriever="SpreadingActivationRetriever",
+    boundary_detector="HysteresisBoundaryDetector",
+    dialog_manager="CLIDialogManager",
+    episode_store="PersistentEpisodeStore",
+    graph_store="LabeledGraphStore",
+    parameters={
+        "auto_label_locations": False,
+        "auto_label_entities": True,
+        "use_persistent_storage": True,
+        # Panorama-specific
+        "image_dir": ".",
+        "viewport_width": 256,
+        "viewport_height": 256,
+        "headings_per_image": 8,
+        "video_fps": 2.0,
+        # Fingerprint-based location resolution (tuned for visual embeddings)
+        "transition_threshold": 0.40,
+        "hysteresis_frames": 3,
+        "match_threshold": 0.35,
+        # Entity matching
+        "entity_match_threshold": 0.80,
+        # Spreading activation
+        "spreading_decay": 0.85,
+        "spreading_max_hops": 3,
+        "spreading_min_activation": 0.1,
+        "spreading_top_k": 5,
+        # Boundary
+        "boundary_high_threshold": 0.7,
+        "boundary_prediction_error_threshold": 0.6,
+    },
+)
+
+
 # Profile registry
 PROFILES: dict[str, ProfileConfig] = {
     "stub": STUB_PROFILE,
     "unity_cheat": UNITY_CHEAT_PROFILE,
     "unity_full": UNITY_FULL_PROFILE,
     "unity_spatial": UNITY_SPATIAL_PROFILE,
+    "panorama": PANORAMA_PROFILE,
 }
 
 
@@ -324,6 +368,17 @@ class ModuleFactory:
                 use_gateway=self.params.get("use_gateway", True),
             )
         
+        elif name == "PanoramaSensorProvider":
+            from episodic_agent.modules.panorama import PanoramaSensorProvider
+            return PanoramaSensorProvider(
+                image_dir=Path(self.params.get("image_dir", ".")),
+                viewport_width=self.params.get("viewport_width", 256),
+                viewport_height=self.params.get("viewport_height", 256),
+                headings_per_image=self.params.get("headings_per_image", 8),
+                video_fps=self.params.get("video_fps", 2.0),
+                seed=self.seed,
+            )
+        
         raise ValueError(f"Unknown sensor provider: {name}")
 
     def _create_perception(self) -> "PerceptionModule":
@@ -339,6 +394,10 @@ class ModuleFactory:
             return PerceptionUnityCheat(
                 include_invisible=self.params.get("include_invisible", False),
             )
+        
+        elif name == "PanoramaPerception":
+            from episodic_agent.modules.panorama import PanoramaPerception
+            return PanoramaPerception()
         
         raise ValueError(f"Unknown perception module: {name}")
 

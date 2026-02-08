@@ -78,3 +78,6 @@ dmypy.json
 runs/
 *.jsonl
 UnitySensorSim/Setup Guide In-Editor Tutorial
+
+dashboard/node_modules
+dashboard/.next

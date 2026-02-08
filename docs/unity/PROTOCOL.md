@@ -861,7 +861,7 @@ Python maintains a fixed-size ring buffer (~50MB) for recent high-res frames:
 
 ## Debugging Protocol Traffic
 
-To inspect the exact JSON crossing the wire, see [SETUP.md — Step 6: Debugging Protocol Traffic](SETUP.md#step-6-debugging-protocol-traffic).
+To inspect the exact JSON crossing the wire, see [SETUP.md — Section 8: Debugging and Diagnostics](SETUP.md#8-debugging-and-diagnostics).
 
 **Quick reference:**
 

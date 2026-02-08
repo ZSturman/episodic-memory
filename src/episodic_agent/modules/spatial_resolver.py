@@ -36,6 +36,15 @@ from episodic_agent.schemas import (
     NodeType,
     Percept,
 )
+from episodic_agent.schemas.panorama_events import (
+    MatchCandidate,
+    MatchEvaluation,
+    MemoryWritePayload,
+    PanoramaAgentState,
+    PanoramaEvent,
+    PanoramaEventType,
+    StateTransitionPayload,
+)
 from episodic_agent.utils.confidence import ConfidenceHelper, ConfidenceSignal
 from episodic_agent.utils.config import (
     CONFIDENCE_T_HIGH,
@@ -46,6 +55,8 @@ from episodic_agent.utils.config import (
 if TYPE_CHECKING:
     from episodic_agent.memory.graph_store import LabeledGraphStore
     from episodic_agent.modules.dialog import DialogManager
+    from episodic_agent.modules.panorama.event_bus import PanoramaEventBus
+    from episodic_agent.modules.panorama.investigation import InvestigationStateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +144,8 @@ class LocationResolverReal(LocationResolver):
         match_threshold: float = 0.35,
         embedding_dim: int = DEFAULT_EMBEDDING_DIM,
         auto_label: bool = False,
+        event_bus: "PanoramaEventBus | None" = None,
+        investigation_sm: "InvestigationStateMachine | None" = None,
     ) -> None:
         self._graph_store = graph_store
         self._dialog_manager = dialog_manager
@@ -141,6 +154,23 @@ class LocationResolverReal(LocationResolver):
         self._match_threshold = match_threshold
         self._embedding_dim = embedding_dim
         self._auto_label = auto_label
+
+        # Observability hooks (optional — backward-compatible)
+        self._event_bus: PanoramaEventBus | None = event_bus
+        self._investigation_sm: InvestigationStateMachine | None = investigation_sm
+        self._step_counter: int = 0
+
+        # Per-fingerprint match history: location_id → [(step, confidence)]
+        self._match_history: dict[str, list[tuple[int, float]]] = {}
+        # Per-fingerprint running variance tracking
+        self._embedding_sum_sq: dict[str, list[float]] = {}
+        # Step tracking per location
+        self._first_seen_step: dict[str, int] = {}
+        self._last_seen_step: dict[str, int] = {}
+        # Aggregated feature summaries per location
+        self._aggregated_features: dict[str, dict[str, Any]] = {}
+        # Label callback (set from API server for dashboard labelling)
+        self._label_callback: Any = None
 
         self._confidence_helper = ConfidenceHelper()
 
@@ -176,6 +206,8 @@ class LocationResolverReal(LocationResolver):
         Returns:
             (location_label, confidence)
         """
+        self._step_counter += 1
+
         embedding = percept.scene_embedding
         if not embedding:
             # No embedding available — return current or unknown
@@ -210,12 +242,19 @@ class LocationResolverReal(LocationResolver):
             current_fp.observation_count += 1
             current_fp.last_visited = datetime.now()
 
+            # Track embedding variance
+            self._update_embedding_variance(self._current_location_id, embedding)
+
             # Update entity co-occurrence
             self._update_entity_cooccurrence(current_fp, percept)
 
             node = self._find_node_for_location(self._current_location_id)
             label = node.label if node else "unknown"
             confidence = self._compute_confidence(current_fp, distance)
+
+            # Emit match evaluation event
+            self._emit_match_evaluation(embedding, label, confidence, distance)
+
             return (label, confidence)
 
         # ── candidate transition ────────────────────────────────────
@@ -272,6 +311,117 @@ class LocationResolverReal(LocationResolver):
         """Get the graph node for a location ID (public accessor)."""
         return self._find_node_for_location(location_id)
 
+    def get_all_match_scores(
+        self, embedding: list[float]
+    ) -> list[MatchCandidate]:
+        """Compute match scores against all known fingerprints.
+
+        Returns a ranked list (best match first) of MatchCandidate
+        objects with confidence and distance for every known location.
+        """
+        candidates: list[MatchCandidate] = []
+        for lid, fp in self._fingerprints.items():
+            if not fp.centroid_embedding:
+                continue
+            dist = _cosine_distance(embedding, fp.centroid_embedding)
+            conf = self._compute_confidence(fp, dist)
+            node = self._find_node_for_location(lid)
+            label = node.label if node else f"location_{lid[:8]}"
+            candidates.append(
+                MatchCandidate(
+                    location_id=lid,
+                    label=label,
+                    confidence=conf,
+                    distance=dist,
+                )
+            )
+        # Sort by confidence descending
+        candidates.sort(key=lambda c: c.confidence, reverse=True)
+        return candidates
+
+    def get_match_history(self, location_id: str) -> list[tuple[int, float]]:
+        """Return the match confidence history for a location."""
+        return list(self._match_history.get(location_id, []))
+
+    def get_embedding_variance(self, location_id: str) -> float:
+        """Return the running embedding variance for a location."""
+        fp = self._fingerprints.get(location_id)
+        if not fp or fp.observation_count < 2:
+            return 0.0
+        sum_sq = self._embedding_sum_sq.get(location_id)
+        if not sum_sq:
+            return 0.0
+        n = fp.observation_count
+        centroid = fp.centroid_embedding
+        # Var = E[X^2] - (E[X])^2, averaged across dimensions
+        variance_per_dim = [
+            (sq / n) - (c ** 2)
+            for sq, c in zip(sum_sq, centroid)
+        ]
+        return sum(max(0.0, v) for v in variance_per_dim) / len(variance_per_dim)
+
+    def get_first_seen_step(self, location_id: str) -> int:
+        """Return the step number when a location was first discovered."""
+        return self._first_seen_step.get(location_id, 0)
+
+    def get_last_seen_step(self, location_id: str) -> int:
+        """Return the step number when a location was last observed."""
+        return self._last_seen_step.get(location_id, 0)
+
+    def get_aggregated_features(self, location_id: str) -> dict[str, Any]:
+        """Return the aggregated feature summary for a location."""
+        return dict(self._aggregated_features.get(location_id, {}))
+
+    def update_aggregated_features(
+        self, location_id: str, feature_summary: dict[str, Any]
+    ) -> None:
+        """Update the running aggregated feature summary for a location.
+
+        Merges numeric fields using running average, keeps latest for others.
+        """
+        if not feature_summary:
+            return
+        existing = self._aggregated_features.get(location_id, {})
+        fp = self._fingerprints.get(location_id)
+        n = fp.observation_count if fp else 1
+
+        merged: dict[str, Any] = dict(existing)
+        for key, value in feature_summary.items():
+            if isinstance(value, (int, float)) and key in existing:
+                prev = existing[key]
+                if isinstance(prev, (int, float)) and n > 1:
+                    # Running average
+                    merged[key] = prev + (value - prev) / n
+                else:
+                    merged[key] = value
+            else:
+                merged[key] = value
+        self._aggregated_features[location_id] = merged
+
+    def apply_dashboard_label(self, label: str) -> None:
+        """Apply a label from the dashboard (via API server POST /api/label).
+
+        Updates the current location's graph node and resets the
+        investigation state machine if present.
+        """
+        if not self._current_location_id:
+            logger.warning("apply_dashboard_label: no current location")
+            return
+
+        node = self._find_node_for_location(self._current_location_id)
+        if node:
+            old_label = node.label
+            if label != old_label:
+                node.labels.append(old_label)
+            node.label = label
+            logger.info("Dashboard label applied: %s → %s", old_label, label)
+        else:
+            logger.warning("apply_dashboard_label: no node for %s",
+                           self._current_location_id)
+
+        if self._investigation_sm:
+            self._investigation_sm.reset_to_confident(label)
+
     # ------------------------------------------------------------------
     # Bootstrap / first frame
     # ------------------------------------------------------------------
@@ -294,6 +444,8 @@ class LocationResolverReal(LocationResolver):
         )
         self._fingerprints[location_id] = fp
         self._current_location_id = location_id
+        self._first_seen_step[location_id] = self._step_counter
+        self._last_seen_step[location_id] = self._step_counter
 
         # Create graph node
         node = self._create_location_node(location_id, embedding, agent_pos)
@@ -325,6 +477,9 @@ class LocationResolverReal(LocationResolver):
             fp.transition_positions.append(agent_pos)
 
         self._current_location_id = location_id
+        self._last_seen_step[location_id] = self._step_counter
+        if location_id not in self._first_seen_step:
+            self._first_seen_step[location_id] = self._step_counter
 
         node = self._find_node_for_location(location_id)
         if node:
@@ -339,6 +494,9 @@ class LocationResolverReal(LocationResolver):
 
         self._dialog_manager.notify(f"📍 Returned to: {label}")
         logger.info("Revisiting location: %s (visits=%d)", label, fp.observation_count)
+
+        # Emit memory_write event for revisit
+        self._emit_memory_write(location_id, label, is_new=False, observation_count=fp.observation_count)
 
         return (label, confidence)
 
@@ -373,12 +531,17 @@ class LocationResolverReal(LocationResolver):
 
         self._fingerprints[location_id] = fp
         self._current_location_id = location_id
+        self._first_seen_step[location_id] = self._step_counter
+        self._last_seen_step[location_id] = self._step_counter
 
         node = self._create_location_node(location_id, candidate_centroid, agent_pos)
         label = node.label
 
         self._dialog_manager.notify(f"🆕 New location discovered: {label}")
         logger.info("New location: %s", label)
+
+        # Emit memory_write event
+        self._emit_memory_write(location_id, label, is_new=True)
 
         return (label, CONFIDENCE_T_LOW)
 
@@ -561,3 +724,109 @@ class LocationResolverReal(LocationResolver):
             fp.entity_cooccurrence_counts[guid] = (
                 fp.entity_cooccurrence_counts.get(guid, 0) + 1
             )
+
+    # ------------------------------------------------------------------
+    # Event emission helpers
+    # ------------------------------------------------------------------
+
+    def _emit_match_evaluation(
+        self,
+        embedding: list[float],
+        current_label: str,
+        current_confidence: float,
+        current_distance: float,
+    ) -> None:
+        """Emit a match_evaluation event with full ranked candidates."""
+        if not self._event_bus:
+            return
+
+        candidates = self.get_all_match_scores(embedding)
+
+        # Compute margin between top-2
+        margin = 0.0
+        if len(candidates) >= 2:
+            margin = candidates[0].confidence - candidates[1].confidence
+
+        evaluation = MatchEvaluation(
+            candidates=candidates,
+            top_margin=margin,
+            hysteresis_active=self._transition_counter > 0,
+            stabilization_frames=self._transition_counter,
+            current_location_id=self._current_location_id,
+            current_distance=current_distance,
+        )
+
+        # Record match history for each candidate
+        for c in candidates:
+            hist = self._match_history.setdefault(c.location_id, [])
+            hist.append((self._step_counter, c.confidence))
+            # Keep bounded
+            if len(hist) > 100:
+                self._match_history[c.location_id] = hist[-100:]
+
+        # Feed investigation state machine if present
+        sm_state = PanoramaAgentState.investigating_unknown
+        if self._investigation_sm:
+            sm_state = self._investigation_sm.state
+
+        event = PanoramaEvent(
+            event_type=PanoramaEventType.match_evaluation,
+            timestamp=datetime.now(),
+            step=self._step_counter,
+            state=sm_state,
+            payload=evaluation.model_dump(),
+        )
+        self._event_bus.emit(event)
+
+    def _emit_memory_write(
+        self,
+        location_id: str,
+        label: str,
+        is_new: bool,
+        observation_count: int = 1,
+    ) -> None:
+        """Emit a memory_write event when a fingerprint is created or updated."""
+        if not self._event_bus:
+            return
+
+        fp = self._fingerprints.get(location_id)
+        emb_norm = 0.0
+        if fp and fp.centroid_embedding:
+            emb_norm = math.sqrt(sum(v * v for v in fp.centroid_embedding))
+
+        payload = MemoryWritePayload(
+            location_id=location_id,
+            label=label,
+            is_new=is_new,
+            observation_count=observation_count,
+            embedding_norm=emb_norm,
+        )
+
+        sm_state = PanoramaAgentState.investigating_unknown
+        if self._investigation_sm:
+            sm_state = self._investigation_sm.state
+
+        event = PanoramaEvent(
+            event_type=PanoramaEventType.memory_write,
+            timestamp=datetime.now(),
+            step=self._step_counter,
+            state=sm_state,
+            payload=payload.model_dump(),
+        )
+        self._event_bus.emit(event)
+
+    def _update_embedding_variance(
+        self,
+        location_id: str,
+        embedding: list[float],
+    ) -> None:
+        """Update running sum-of-squares for embedding variance tracking."""
+        if location_id not in self._embedding_sum_sq:
+            self._embedding_sum_sq[location_id] = [v * v for v in embedding]
+        else:
+            sq = self._embedding_sum_sq[location_id]
+            for i, v in enumerate(embedding):
+                if i < len(sq):
+                    sq[i] += v * v
+                else:
+                    sq.append(v * v)

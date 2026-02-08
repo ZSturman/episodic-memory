@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Catppuccin Mocha base ──────────────────────────────────────── */
+
+:root {
+  --ctp-crust: #11111b;
+  --ctp-mantle: #181825;
+  --ctp-base: #1e1e2e;
+  --ctp-surface0: #313244;
+  --ctp-surface1: #45475a;
+  --ctp-surface2: #585b70;
+  --ctp-overlay0: #6c7086;
+  --ctp-overlay1: #7f849c;
+  --ctp-text: #cdd6f4;
+  --ctp-subtext0: #a6adc8;
+  --ctp-subtext1: #bac2de;
+  --ctp-blue: #89b4fa;
+  --ctp-green: #a6e3a1;
+  --ctp-yellow: #f9e2af;
+  --ctp-peach: #fab387;
+  --ctp-red: #f38ba8;
+  --ctp-mauve: #cba6f7;
+  --ctp-teal: #94e2d5;
+  --ctp-sky: #89dceb;
+  --ctp-lavender: #b4befe;
+  --ctp-flamingo: #f2cdcd;
+  --ctp-rosewater: #f5e0dc;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--ctp-crust);
+  color: var(--ctp-text);
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--ctp-mantle);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--ctp-surface1);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ctp-surface2);
+}
+
+/* ─── Utility classes ────────────────────────────────────────────── */
+
+@layer components {
+  .panel {
+    @apply rounded-lg border border-ctp-surface0 bg-ctp-mantle p-4;
+  }
+
+  .panel-header {
+    @apply mb-3 flex items-center justify-between text-sm font-semibold uppercase tracking-wide text-ctp-subtext0;
+  }
+
+  .badge {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
+  }
+
+  .btn {
+    @apply rounded-md px-3 py-1.5 text-sm font-medium transition-colors;
+  }
+
+  .btn-primary {
+    @apply btn bg-ctp-blue text-ctp-crust hover:bg-ctp-blue/80;
+  }
+
+  .btn-ghost {
+    @apply btn text-ctp-subtext0 hover:bg-ctp-surface0 hover:text-ctp-text;
+  }
+
+  .mono {
+    @apply font-mono text-xs;
+  }
+}

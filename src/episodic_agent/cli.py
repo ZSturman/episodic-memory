@@ -7,7 +7,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 
@@ -499,6 +499,404 @@ def run(
                 typer.echo(f"  Events labeled by user: {event_resolver.events_labeled}")
                 typer.echo(f"  Events matched to patterns: {event_resolver.events_recognized}")
                 typer.echo(f"  User prompts issued: {event_resolver.questions_asked}")
+
+
+@app.command()
+def panorama(
+    image_dir: Path = typer.Argument(
+        ...,
+        help="Directory containing panorama images and/or videos",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+    ),
+    steps: int = typer.Option(
+        0,
+        "--steps",
+        "-n",
+        help="Max steps (0 = run until all images exhausted)",
+    ),
+    fps: float = typer.Option(
+        2.0,
+        "--fps",
+        "-f",
+        help="Target frames per second",
+    ),
+    seed: int = typer.Option(
+        42,
+        "--seed",
+        "-s",
+        help="Random seed for deterministic behavior",
+    ),
+    output_dir: Path = typer.Option(
+        Path("runs"),
+        "--output",
+        "-o",
+        help="Output directory for run logs",
+    ),
+    memory_dir: Optional[Path] = typer.Option(
+        None,
+        "--memory-dir",
+        "-m",
+        help="Directory for persistent memory (default: <output>/panorama_memory)",
+    ),
+    reset_memory: bool = typer.Option(
+        False,
+        "--reset-memory",
+        help="Clear memory before starting",
+    ),
+    viewport_width: int = typer.Option(
+        256,
+        "--viewport-width",
+        help="Width of each viewport crop in pixels",
+    ),
+    viewport_height: int = typer.Option(
+        256,
+        "--viewport-height",
+        help="Height of each viewport crop in pixels",
+    ),
+    headings: int = typer.Option(
+        8,
+        "--headings",
+        help="Number of horizontal viewpoints per image",
+    ),
+    auto_label: bool = typer.Option(
+        False,
+        "--auto-label",
+        help="Auto-generate labels without prompting",
+    ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        "-q",
+        help="Suppress per-step output",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Enable verbose logging",
+    ),
+    debug_ui: bool = typer.Option(
+        False,
+        "--debug-ui",
+        help="Launch browser debug dashboard on port 8780",
+    ),
+) -> None:
+    """Explore panorama images / video and infer location from visual evidence.
+
+    The agent loads images from IMAGE_DIR, simulates looking around by
+    sliding a viewport across each image, extracts visual features, and
+    accumulates evidence to infer location.  On first encounter it asks
+    the user for a label; on revisit it proposes a hypothesis.
+
+    Examples:
+
+        episodic-agent panorama ./my_photos/
+        episodic-agent panorama ./rooms/ --debug-ui --headings 12
+        episodic-agent panorama ./rooms/ --reset-memory
+    """
+    setup_logging(verbose)
+
+    # Run ID
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = output_dir / f"{run_id}_panorama"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_path = run_dir / "run.jsonl"
+
+    # Memory directory
+    mem_dir = memory_dir or (output_dir / "panorama_memory")
+    if reset_memory and mem_dir.exists():
+        import shutil
+        shutil.rmtree(mem_dir)
+        typer.echo(f"Cleared memory: {mem_dir}")
+    mem_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build profile overrides
+    overrides: dict[str, Any] = {
+        "image_dir": str(image_dir),
+        "viewport_width": viewport_width,
+        "viewport_height": viewport_height,
+        "headings_per_image": headings,
+    }
+    if auto_label:
+        overrides["auto_label_locations"] = True
+        overrides["auto_label_entities"] = True
+
+    # Get panorama profile
+    try:
+        profile_config = get_profile("panorama")
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    factory = ModuleFactory(
+        profile=profile_config,
+        run_dir=mem_dir,   # persistent memory lives here
+        seed=seed,
+        **overrides,
+    )
+
+    modules = factory.create_modules()
+
+    orchestrator = AgentOrchestrator(
+        sensor=modules["sensor"],
+        perception=modules["perception"],
+        acf_builder=modules["acf_builder"],
+        location_resolver=modules["location_resolver"],
+        entity_resolver=modules["entity_resolver"],
+        event_resolver=modules["event_resolver"],
+        retriever=modules["retriever"],
+        boundary_detector=modules["boundary_detector"],
+        dialog_manager=modules["dialog_manager"],
+        episode_store=modules["episode_store"],
+        graph_store=modules["graph_store"],
+        run_id=run_id,
+    )
+
+    # Terminal debugger
+    debugger = None
+    if not quiet:
+        from episodic_agent.modules.panorama.debug import TerminalDebugger
+        debugger = TerminalDebugger()
+
+    # Web debug UI
+    debug_server = None
+    api_server = None
+    event_bus = None
+    investigation_sm = None
+
+    if debug_ui:
+        # Create observability infrastructure
+        from episodic_agent.modules.panorama.event_bus import PanoramaEventBus
+        from episodic_agent.modules.panorama.investigation import InvestigationStateMachine
+        from episodic_agent.modules.panorama.api_server import PanoramaAPIServer
+        from episodic_agent.modules.panorama.replay import ReplayController
+
+        event_bus = PanoramaEventBus()
+        replay_controller = ReplayController(event_bus=event_bus)
+        investigation_sm = InvestigationStateMachine(
+            min_investigation_steps=5,
+            max_investigation_steps=20,
+            label_request_ceiling=0.4,
+            confident_match_threshold=0.7,
+            plateau_threshold=0.05,
+            event_bus=event_bus,
+        )
+
+        # Inject event bus into modules (post-hoc wiring)
+        loc_resolver = modules["location_resolver"]
+        if hasattr(loc_resolver, "_event_bus"):
+            loc_resolver._event_bus = event_bus
+            loc_resolver._investigation_sm = investigation_sm
+
+        perc = modules["perception"]
+        if hasattr(perc, "_event_bus"):
+            perc._event_bus = event_bus
+        if hasattr(perc, "_investigation_sm"):
+            perc._investigation_sm = investigation_sm
+
+        # Label callback: applies label via resolver and resets SM
+        def _label_callback(label: str) -> None:
+            if hasattr(loc_resolver, "apply_dashboard_label"):
+                loc_resolver.apply_dashboard_label(label)
+
+        # Start API server
+        api_server = PanoramaAPIServer(
+            port=8780,
+            event_bus=event_bus,
+            location_resolver=loc_resolver,
+            perception=perc,
+            label_callback=_label_callback,
+            replay_controller=replay_controller,
+            config={
+                "transition_threshold": overrides.get("transition_threshold", 0.40),
+                "hysteresis_frames": overrides.get("hysteresis_frames", 3),
+                "match_threshold": overrides.get("match_threshold", 0.35),
+                "headings_per_image": headings,
+                "viewport_size": f"{viewport_width}x{viewport_height}",
+                "auto_label": auto_label,
+                "fps": fps,
+                "investigation": {
+                    "min_steps": 5,
+                    "max_steps": 20,
+                    "plateau_threshold": 0.05,
+                    "label_request_ceiling": 0.4,
+                    "confident_match_threshold": 0.7,
+                },
+            },
+        )
+        api_server.start()
+        typer.echo(f"Panorama API: http://localhost:8780")
+
+        # JSONL event export — subscribe to event bus and write each event
+        import json as _json
+        _events_path = run_dir / "events.jsonl"
+        _events_file = open(_events_path, "a", encoding="utf-8")
+
+        def _jsonl_sink(event: Any) -> None:
+            """Append event to events.jsonl."""
+            try:
+                if hasattr(event, "model_dump"):
+                    record = event.model_dump(mode="json")
+                elif hasattr(event, "dict"):
+                    record = event.dict()
+                else:
+                    record = {"raw": str(event)}
+                _events_file.write(_json.dumps(record, default=str) + "\n")
+                _events_file.flush()
+            except Exception:
+                pass  # never crash the agent for logging
+
+        event_bus.subscribe(_jsonl_sink)
+        typer.echo(f"Events log: {_events_path}")
+
+        # Also start legacy debug server for backward compat
+        from episodic_agent.modules.panorama.debug_server import PanoramaDebugServer
+        debug_server = PanoramaDebugServer(port=8781)
+        debug_server.start()
+        typer.echo(f"Legacy debug UI: http://localhost:8781")
+
+        # Auto-start Next.js dashboard dev server
+        dashboard_proc = None
+        dashboard_dir = Path(__file__).resolve().parent.parent.parent / "dashboard"
+        if dashboard_dir.is_dir() and (dashboard_dir / "package.json").exists():
+            import subprocess
+            node_modules = dashboard_dir / "node_modules"
+            if not node_modules.is_dir():
+                typer.echo("Installing dashboard dependencies…")
+                subprocess.run(
+                    ["npm", "install"],
+                    cwd=str(dashboard_dir),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            dashboard_proc = subprocess.Popen(
+                ["npm", "run", "dev"],
+                cwd=str(dashboard_dir),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            typer.echo(f"Dashboard: http://localhost:3000")
+        else:
+            typer.echo("Dashboard directory not found — run `npm run dev` manually in dashboard/")
+
+    step_interval = 1.0 / fps if fps > 0 else 0.0
+    infinite_mode = steps == 0
+
+    # Header
+    if not quiet:
+        sensor = modules["sensor"]
+        typer.echo("Episodic Memory Agent — Panorama Harness")
+        typer.echo(f"Images: {image_dir}  ({sensor.source_count} sources)")
+        typer.echo(f"Viewports: {headings} per image, {viewport_width}×{viewport_height}px")
+        typer.echo(f"Memory: {mem_dir}")
+        typer.echo(f"Run ID: {run_id}")
+        typer.echo(f"Log: {log_path}")
+        typer.echo("-" * 60)
+
+    step_count = 0
+    try:
+        with LogWriter(log_path) as logger_w:
+            while modules["sensor"].has_frames():
+                step_start = time.perf_counter()
+
+                try:
+                    result = orchestrator.step()
+                    step_count += 1
+                    logger_w.write(result)
+
+                    if debugger:
+                        debugger.print_step(result, modules["sensor"], modules.get("perception"))
+
+                    if debug_server:
+                        debug_server.update_state(result, modules["sensor"], modules.get("perception"))
+
+                    if api_server:
+                        # Feed investigation SM with match data
+                        _match_candidates = None
+                        if investigation_sm and event_bus:
+                            from episodic_agent.schemas.panorama_events import MatchEvaluation, MatchCandidate
+                            extras = getattr(result, "extras", {}) or {}
+                            scene_emb = extras.get("viewport_embedding") or extras.get("panoramic_embedding")
+                            loc_resolver = modules["location_resolver"]
+                            if scene_emb and hasattr(loc_resolver, "get_all_match_scores"):
+                                _match_candidates = loc_resolver.get_all_match_scores(scene_emb)
+                                margin = 0.0
+                                if len(_match_candidates) >= 2:
+                                    margin = _match_candidates[0].confidence - _match_candidates[1].confidence
+                                evaluation = MatchEvaluation(
+                                    candidates=_match_candidates,
+                                    top_margin=margin,
+                                    current_location_id=getattr(loc_resolver, "_current_location_id", None),
+                                )
+                                viewport_b64 = extras.get("viewport_image_b64")
+                                feature_summary = extras.get("feature_summary")
+                                investigation_sm.update(evaluation, viewport_b64, feature_summary)
+
+                        api_server.update_state(
+                            result,
+                            modules["sensor"],
+                            modules.get("perception"),
+                            investigation_sm,
+                            match_candidates=_match_candidates,
+                        )
+
+                except TimeoutError:
+                    continue
+                except KeyboardInterrupt:
+                    raise
+                except Exception as e:
+                    if not quiet:
+                        typer.echo(f"[ERROR] Step failed: {e}")
+                    if verbose:
+                        import traceback
+                        traceback.print_exc()
+                    continue
+
+                if not infinite_mode and step_count >= steps:
+                    break
+
+                elapsed = time.perf_counter() - step_start
+                if step_interval > elapsed:
+                    time.sleep(step_interval - elapsed)
+
+    except KeyboardInterrupt:
+        if not quiet:
+            typer.echo("\n" + "-" * 60)
+            typer.echo("Interrupted by user")
+
+    finally:
+        sensor = modules.get("sensor")
+        if hasattr(sensor, "stop"):
+            sensor.stop()
+        if debug_server:
+            debug_server.stop()
+        if api_server:
+            api_server.stop()
+        # Stop dashboard dev server
+        if 'dashboard_proc' in dir() and dashboard_proc and dashboard_proc.poll() is None:
+            dashboard_proc.terminate()
+            dashboard_proc.wait(timeout=5)
+        # Close JSONL event log
+        if '_events_file' in dir() and _events_file and not _events_file.closed:
+            _events_file.close()
+
+    # Summary
+    if not quiet:
+        typer.echo("-" * 60)
+        typer.echo(f"Completed {step_count} steps")
+        typer.echo(f"Episodes frozen: {orchestrator.episode_count}")
+        typer.echo(f"Log: {log_path}")
+        typer.echo(f"Memory: {mem_dir}")
+
+        graph_store = modules.get("graph_store")
+        if hasattr(graph_store, "get_nodes_by_type"):
+            from episodic_agent.schemas import NodeType
+            locations = graph_store.get_nodes_by_type(NodeType.LOCATION)
+            typer.echo(f"\nLearned locations ({len(locations)}):")
+            for loc in locations:
+                typer.echo(f"  - {loc.label} (visits: {loc.access_count})")
 
 
 @app.command()
