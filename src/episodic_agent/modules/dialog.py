@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from episodic_agent.schemas.labels import LabelConflict
@@ -159,6 +159,12 @@ class CLIDialogManager(DialogManager):
         self._input = input_stream or sys.stdin
         self._output = output_stream or sys.stdout
         self._error = error_stream or sys.stderr
+        # Called with (label: str) whenever a label is provided via CLI
+        self._on_label_callback: Any = None
+
+    def set_on_label_callback(self, callback: Any) -> None:
+        """Register a callback for when a label is provided via CLI."""
+        self._on_label_callback = callback
 
     def _print(self, message: str, end: str = "\n") -> None:
         """Print to output stream."""
@@ -204,7 +210,13 @@ class CLIDialogManager(DialogManager):
             
             if not response:
                 if suggestions:
-                    return suggestions[0]
+                    label = suggestions[0]
+                    if self._on_label_callback:
+                        try:
+                            self._on_label_callback(label)
+                        except Exception:
+                            pass
+                    return label
                 self._print("Please enter a label")
                 continue
             
@@ -212,8 +224,19 @@ class CLIDialogManager(DialogManager):
             if suggestions and response.isdigit():
                 idx = int(response) - 1
                 if 0 <= idx < len(suggestions):
-                    return suggestions[idx]
+                    label = suggestions[idx]
+                    if self._on_label_callback:
+                        try:
+                            self._on_label_callback(label)
+                        except Exception:
+                            pass
+                    return label
             
+            if self._on_label_callback:
+                try:
+                    self._on_label_callback(response)
+                except Exception:
+                    pass
             return response
 
     def resolve_conflict(

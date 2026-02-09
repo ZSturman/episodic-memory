@@ -8,17 +8,20 @@ import { STATE_COLORS, STATE_LABELS } from "@/lib/types";
 interface LabelRequestPanelProps {
   agentState: PanoramaAgentState;
   evidence: EvidenceBundle | null;
+  cliLabelEvent?: { label: string; step: number; timestamp: string } | null;
 }
 
 export function LabelRequestPanel({
   agentState,
   evidence,
+  cliLabelEvent,
 }: LabelRequestPanelProps) {
   const [label, setLabel] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<string | null>(null);
 
   const isRequesting = agentState === "label_request";
+  const cliProvided = !!cliLabelEvent;
 
   const handleSubmit = async () => {
     if (!label.trim()) return;
@@ -39,6 +42,8 @@ export function LabelRequestPanel({
       className={`panel ${
         isRequesting
           ? "border-ctp-red/30 ring-1 ring-ctp-red/20"
+          : cliProvided
+          ? "border-ctp-green/30 ring-1 ring-ctp-green/20"
           : ""
       }`}
     >
@@ -55,9 +60,40 @@ export function LabelRequestPanel({
         </span>
       </div>
 
-      {isRequesting ? (
+      {/* CLI provided a label — show it */}
+      {cliProvided && !isRequesting && (
+        <div className="space-y-2">
+          <div className="rounded-md bg-ctp-green/10 p-2.5 text-sm text-ctp-green">
+            Label provided via CLI at step {cliLabelEvent!.step}
+          </div>
+          <div className="rounded bg-ctp-surface0 p-2 text-sm font-medium text-ctp-text">
+            &quot;{cliLabelEvent!.label}&quot;
+          </div>
+          {/* Still allow dashboard relabeling */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+              placeholder="Relabel from dashboard..."
+              className="flex-1 rounded-md border border-ctp-surface0 bg-ctp-crust px-3 py-1.5 text-xs text-ctp-text placeholder-ctp-overlay0 focus:border-ctp-blue focus:outline-none"
+              disabled={submitting}
+            />
+            <button
+              onClick={handleSubmit}
+              disabled={!label.trim() || submitting}
+              className="btn-primary text-xs disabled:opacity-40"
+            >
+              {submitting ? "..." : "Relabel"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Dashboard label request */}
+      {isRequesting && (
         <div className="space-y-3">
-          {/* Urgency notice */}
           <div className="rounded-md bg-ctp-red/10 p-2.5 text-sm text-ctp-red">
             Agent is requesting a label for an unknown location.
           </div>
@@ -119,7 +155,10 @@ export function LabelRequestPanel({
             </button>
           </div>
         </div>
-      ) : (
+      )}
+
+      {/* Neither requesting nor CLI provided */}
+      {!isRequesting && !cliProvided && (
         <div className="text-sm text-ctp-overlay0">
           No label requested. Agent is{" "}
           <span style={{ color: STATE_COLORS[agentState] }}>

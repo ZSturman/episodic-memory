@@ -84,6 +84,7 @@ class PanoramaAPIState:
             "recent_viewports": [],
             "feature_arrays": {},
             "investigation_steps": 0,
+            "cli_label_event": None,  # tracks CLI label prompts: {label, location_id, step}
         }
         # Recent viewports ring buffer (separate for efficiency)
         self._recent_viewports: deque[str] = deque(maxlen=12)
@@ -214,6 +215,12 @@ class _APIHandler(BaseHTTPRequestHandler):
             self._handle_evidence()
         elif path == "/api/memories":
             self._handle_memories()
+        elif path.startswith("/api/memories/") and path.endswith("/variance"):
+            lid = path.replace("/api/memories/", "").replace("/variance", "")
+            self._handle_embedding_variance(lid)
+        elif path.startswith("/api/memories/") and path.endswith("/embedding"):
+            lid = path.replace("/api/memories/", "").replace("/embedding", "")
+            self._handle_full_embedding(lid)
         elif path.startswith("/api/memories/"):
             location_id = path.split("/api/memories/")[1]
             self._handle_memory_detail(location_id)
@@ -227,14 +234,12 @@ class _APIHandler(BaseHTTPRequestHandler):
             self._handle_graph_topology()
         elif path == "/api/similarity/matrix":
             self._handle_similarity_matrix()
-        elif path.startswith("/api/memories/") and path.endswith("/variance"):
-            lid = path.replace("/api/memories/", "").replace("/variance", "")
-            self._handle_embedding_variance(lid)
-        elif path.startswith("/api/memories/") and path.endswith("/embedding"):
-            lid = path.replace("/api/memories/", "").replace("/embedding", "")
-            self._handle_full_embedding(lid)
         elif path == "/api/replay/state":
             self._handle_replay_state()
+        elif path == "/api/replay/runs":
+            self._handle_replay_runs()
+        elif path == "/api/source-image":
+            self._handle_source_image()
         else:
             self._send_html(_FALLBACK_HTML)
 
@@ -405,6 +410,43 @@ class _APIHandler(BaseHTTPRequestHandler):
             self._send_json(details)
         else:
             self._send_json({})
+
+    def _handle_source_image(self) -> None:
+        """GET /api/source-image — return the current full panorama source image as base64."""
+        import os
+        import base64 as b64mod
+        state = self._state.snapshot()
+        source_file = state.get("source_file", "")
+        if not source_file:
+            self._send_json({"error": "no source file", "image_b64": None})
+            return
+
+        # The sensor stores the resolved path; try it directly, then relative to cwd
+        candidates = [source_file, os.path.join(os.getcwd(), source_file)]
+        img_b64 = None
+        resolved_path = None
+        for path in candidates:
+            if os.path.isfile(path):
+                try:
+                    with open(path, "rb") as f:
+                        img_b64 = b64mod.b64encode(f.read()).decode("ascii")
+                    resolved_path = path
+                    break
+                except Exception:
+                    continue
+
+        if img_b64:
+            # Detect mime type from extension
+            ext = os.path.splitext(resolved_path or "")[1].lower()
+            mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                    "webp": "image/webp", "bmp": "image/bmp"}.get(ext.lstrip("."), "image/jpeg")
+            self._send_json({
+                "source_file": source_file,
+                "mime_type": mime,
+                "image_b64": img_b64,
+            })
+        else:
+            self._send_json({"error": "file not found", "source_file": source_file, "image_b64": None})
 
     def _handle_timeline(self, query: dict[str, str]) -> None:
         last_n = int(query.get("last", "100"))
@@ -627,6 +669,33 @@ class _APIHandler(BaseHTTPRequestHandler):
                 "cursor": 0, "playing": False, "speed": 1.0,
             })
 
+    def _handle_replay_runs(self) -> None:
+        """GET /api/replay/runs — list available run directories with events.jsonl."""
+        import os
+        runs_dir = os.path.join(os.getcwd(), "runs")
+        available: list[dict[str, Any]] = []
+        if os.path.isdir(runs_dir):
+            for entry in sorted(os.listdir(runs_dir), reverse=True):
+                run_path = os.path.join(runs_dir, entry)
+                if not os.path.isdir(run_path):
+                    continue
+                events_file = os.path.join(run_path, "events.jsonl")
+                log_file = os.path.join(run_path, "log.jsonl")
+                target = None
+                if os.path.isfile(events_file):
+                    target = events_file
+                elif os.path.isfile(log_file):
+                    target = log_file
+                if target:
+                    stat = os.stat(target)
+                    available.append({
+                        "name": entry,
+                        "file": target,
+                        "size_bytes": stat.st_size,
+                        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    })
+        self._send_json({"runs": available, "count": len(available)})
+
     def _handle_replay_load(self) -> None:
         """POST /api/replay/load — load a JSONL file for replay."""
         rc = self._replay_controller
@@ -827,6 +896,11 @@ class PanoramaAPIServer:
             raw = getattr(result, "raw_data", None)
             if isinstance(raw, dict):
                 viewport_b64 = raw.get("image_bytes_b64")
+        if not viewport_b64 and sensor:
+            # Fallback: try reading from the sensor's current frame
+            current_frame = getattr(sensor, "current_frame", None)
+            if current_frame and hasattr(current_frame, "raw_data"):
+                viewport_b64 = current_frame.raw_data.get("image_bytes_b64")
         patch["viewport_image_b64"] = viewport_b64
         if viewport_b64:
             self.state.push_viewport(viewport_b64)
@@ -881,6 +955,23 @@ class PanoramaAPIServer:
         log = current.get("message_log", [])
         log.append(msg_entry)
         patch["message_log"] = log
+
+        # Known locations summary — for dashboard sidebar
+        if resolver and hasattr(resolver, "get_all_fingerprints"):
+            known_locs = []
+            for lid, fp in resolver.get_all_fingerprints().items():
+                node = None
+                if hasattr(resolver, "get_location_node"):
+                    node = resolver.get_location_node(lid)
+                label = node.label if node else f"loc_{lid[:8]}"
+                is_current = lid == getattr(resolver, "_current_location_id", None)
+                known_locs.append({
+                    "location_id": lid,
+                    "label": label,
+                    "visits": fp.observation_count,
+                    "is_current": is_current,
+                })
+            patch["known_locations"] = known_locs
 
         self.state.update(patch)
 

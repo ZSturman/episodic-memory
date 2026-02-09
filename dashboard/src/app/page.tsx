@@ -68,6 +68,8 @@ export default function DashboardPage() {
                 heading={state?.heading_deg ?? 0}
                 viewportIndex={state?.viewport_index ?? 0}
                 totalViewports={state?.total_viewports ?? 0}
+                featureSummary={state?.feature_summary ?? null}
+                sourceFile={state?.source_file ?? ""}
               />
             )}
 
@@ -116,6 +118,7 @@ export default function DashboardPage() {
               <LabelRequestPanel
                 agentState={state?.agent_state ?? "investigating_unknown"}
                 evidence={state?.evidence_bundle ?? null}
+                cliLabelEvent={state?.cli_label_event ?? null}
               />
             )}
 

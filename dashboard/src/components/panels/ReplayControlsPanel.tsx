@@ -1,7 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { api } from "@/lib/api";
 import type { ReplayState } from "@/lib/types";
+
+interface RunEntry {
+  name: string;
+  file: string;
+  size_bytes: number;
+  modified: string;
+}
 
 interface Props {
   replay: ReplayState | null;
@@ -12,11 +20,22 @@ interface Props {
 /**
  * ReplayControlsPanel — play/pause/seek controls for JSONL replay.
  *
- * Allows loading a historical events.jsonl file and scrubbing through
- * it frame-by-frame or at configurable speed.
+ * Auto-lists available run directories and allows loading their events
+ * for frame-by-frame or configurable-speed playback.
  */
 export function ReplayControlsPanel({ replay, onLoad, onControl }: Props) {
   const [filePath, setFilePath] = useState("");
+  const [runs, setRuns] = useState<RunEntry[]>([]);
+  const [runsLoading, setRunsLoading] = useState(false);
+
+  // Auto-fetch available runs on mount
+  useEffect(() => {
+    setRunsLoading(true);
+    api.getReplayRuns()
+      .then((data) => setRuns(data.runs))
+      .catch(() => setRuns([]))
+      .finally(() => setRunsLoading(false));
+  }, []);
 
   const loaded = replay?.loaded ?? false;
   const playing = replay?.playing ?? false;
@@ -24,6 +43,12 @@ export function ReplayControlsPanel({ replay, onLoad, onControl }: Props) {
   const total = replay?.total_events ?? 0;
   const speed = replay?.speed ?? 1.0;
   const pct = total > 0 ? Math.round((cursor / total) * 100) : 0;
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  };
 
   return (
     <div className="rounded-lg border border-ctp-surface0 bg-ctp-mantle p-4">
@@ -36,22 +61,70 @@ export function ReplayControlsPanel({ replay, onLoad, onControl }: Props) {
         )}
       </h3>
 
-      {/* Load file input */}
+      {/* Run selection */}
       {!loaded && (
-        <div className="mb-3 flex gap-2">
-          <input
-            type="text"
-            value={filePath}
-            onChange={(e) => setFilePath(e.target.value)}
-            placeholder="Path to events.jsonl…"
-            className="flex-1 rounded border border-ctp-surface1 bg-ctp-crust px-2 py-1 text-xs text-ctp-text placeholder:text-ctp-overlay0 focus:border-ctp-blue focus:outline-none"
-          />
-          <button
-            onClick={() => filePath.trim() && onLoad(filePath.trim())}
-            className="rounded bg-ctp-blue px-3 py-1 text-xs font-semibold text-ctp-base hover:bg-ctp-sapphire"
-          >
-            Load
-          </button>
+        <div className="mb-3 space-y-2">
+          {/* Available runs dropdown */}
+          {runs.length > 0 && (
+            <div>
+              <div className="mb-1 text-[10px] uppercase tracking-wide text-ctp-overlay0">
+                Available Runs ({runs.length})
+              </div>
+              <div className="max-h-40 space-y-1 overflow-y-auto">
+                {runs.map((run) => (
+                  <button
+                    key={run.file}
+                    onClick={() => {
+                      setFilePath(run.file);
+                      onLoad(run.file);
+                    }}
+                    className={`w-full rounded-md px-2.5 py-1.5 text-left transition-colors ${
+                      filePath === run.file
+                        ? "bg-ctp-blue/15 border border-ctp-blue/30"
+                        : "bg-ctp-surface0 hover:bg-ctp-surface1"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-ctp-text">
+                        {run.name}
+                      </span>
+                      <span className="text-[10px] text-ctp-overlay0">
+                        {formatSize(run.size_bytes)}
+                      </span>
+                    </div>
+                    <div className="text-[9px] text-ctp-overlay0 truncate">
+                      {run.modified}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {runsLoading && (
+            <div className="text-xs text-ctp-overlay0">Loading runs...</div>
+          )}
+          {!runsLoading && runs.length === 0 && (
+            <div className="text-xs text-ctp-overlay0">
+              No previous runs found in runs/ directory
+            </div>
+          )}
+
+          {/* Manual path input fallback */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={filePath}
+              onChange={(e) => setFilePath(e.target.value)}
+              placeholder="Or enter path to events.jsonl…"
+              className="flex-1 rounded border border-ctp-surface1 bg-ctp-crust px-2 py-1 text-xs text-ctp-text placeholder:text-ctp-overlay0 focus:border-ctp-blue focus:outline-none"
+            />
+            <button
+              onClick={() => filePath.trim() && onLoad(filePath.trim())}
+              className="rounded bg-ctp-blue px-3 py-1 text-xs font-semibold text-ctp-base hover:bg-ctp-sapphire"
+            >
+              Load
+            </button>
+          </div>
         </div>
       )}
 

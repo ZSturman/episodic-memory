@@ -25,14 +25,25 @@ export function useMemories() {
     }
   }, []);
 
-  // Fetch detail when selectedId changes
+  // Fetch detail when selectedId changes or memories list updates
   useEffect(() => {
     if (!selectedId) {
       setDetail(null);
       return;
     }
-    api.getMemoryCard(selectedId).then(setDetail).catch(() => setDetail(null));
-  }, [selectedId]);
+    let cancelled = false;
+    const fetchDetail = () => {
+      api.getMemoryCard(selectedId).then((d) => {
+        if (!cancelled) setDetail(d);
+      }).catch(() => {
+        if (!cancelled) setDetail(null);
+      });
+    };
+    fetchDetail();
+    // Re-fetch detail on same cadence as the memory list
+    const detailTimer = setInterval(fetchDetail, pollingMs * 5);
+    return () => { cancelled = true; clearInterval(detailTimer); };
+  }, [selectedId, pollingMs]);
 
   useEffect(() => {
     if (paused) return;

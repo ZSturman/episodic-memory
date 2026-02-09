@@ -76,6 +76,7 @@ class InvestigationStateMachine:
         label_request_ceiling: float = 0.4,
         confident_match_threshold: float = 0.7,
         plateau_window: int = 5,
+        min_images: int = 2,
         event_bus: Any = None,
     ) -> None:
         self._plateau_threshold = plateau_threshold
@@ -84,6 +85,7 @@ class InvestigationStateMachine:
         self._label_request_ceiling = label_request_ceiling
         self._confident_threshold = confident_match_threshold
         self._plateau_window = plateau_window
+        self._min_images = min_images
         self._event_bus = event_bus
 
         # Internal state
@@ -98,6 +100,7 @@ class InvestigationStateMachine:
         self._feature_summaries: deque[dict[str, Any]] = deque(maxlen=20)
         self._match_scores: dict[str, float] = {}
         self._last_evaluation: MatchEvaluation | None = None
+        self._source_images_seen: set[str] = set()  # distinct panorama images investigated
 
     # ------------------------------------------------------------------
     # Properties
@@ -127,11 +130,17 @@ class InvestigationStateMachine:
     # Core transition logic
     # ------------------------------------------------------------------
 
+    @property
+    def images_investigated(self) -> int:
+        """Number of distinct panorama images investigated so far."""
+        return len(self._source_images_seen)
+
     def update(
         self,
         evaluation: MatchEvaluation,
         viewport_b64: str | None = None,
         feature_summary: dict[str, Any] | None = None,
+        source_file: str | None = None,
     ) -> PanoramaAgentState:
         """Feed a new match evaluation and compute the next state.
 
@@ -143,6 +152,8 @@ class InvestigationStateMachine:
             Base64 JPEG of the current viewport (for evidence bundle).
         feature_summary : dict, optional
             Feature summary for the current step.
+        source_file : str, optional
+            Source panorama filename (tracked for min_images gate).
 
         Returns
         -------
@@ -151,6 +162,10 @@ class InvestigationStateMachine:
         """
         self._last_evaluation = evaluation
         self._investigation_step_count += 1
+
+        # Track distinct source images investigated
+        if source_file:
+            self._source_images_seen.add(source_file)
 
         # Accumulate evidence
         top_confidence = (
@@ -227,12 +242,18 @@ class InvestigationStateMachine:
 
         # During active investigation
         n = self._investigation_step_count
+        images_seen = len(self._source_images_seen)
 
         # Not enough steps yet — stay investigating
         if n < self._min_steps:
             if top_confidence > self._label_request_ceiling:
                 return PanoramaAgentState.matching_known
             return PanoramaAgentState.investigating_unknown
+
+        # Multi-image gate: require evidence from multiple distinct
+        # panorama images before allowing a label request.  This prevents
+        # premature decisions based on a single image's viewports.
+        need_more_images = images_seen < self._min_images
 
         # Check for confidence plateau
         is_plateaued = self._is_confidence_plateaued()
@@ -243,6 +264,9 @@ class InvestigationStateMachine:
         if is_plateaued or force_decision:
             if top_confidence <= self._label_request_ceiling:
                 # Low confidence plateau → novel location candidate
+                if need_more_images:
+                    # Not enough images yet — keep investigating
+                    return PanoramaAgentState.investigating_unknown
                 if self._state == PanoramaAgentState.novel_location_candidate:
                     # Already a candidate — emit label request
                     return PanoramaAgentState.label_request
@@ -330,6 +354,7 @@ class InvestigationStateMachine:
         self._feature_summaries.clear()
         self._match_scores.clear()
         self._last_evaluation = None
+        self._source_images_seen.clear()
         logger.debug("Investigation state machine reset")
 
     def reset_to_confident(self, location_label: str) -> None:
@@ -343,6 +368,7 @@ class InvestigationStateMachine:
         self._feature_summaries.clear()
         self._match_scores.clear()
         self._last_evaluation = None
+        self._source_images_seen.clear()
         logger.debug("Investigation reset to confident_match: %s", location_label)
 
     # ------------------------------------------------------------------

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from episodic_agent.schemas import (
     ActiveContextFrame,
@@ -200,6 +200,19 @@ class AgentOrchestrator:
         if hasattr(self._event_resolver, "deltas_detected"):
             delta_count = self._event_resolver.deltas_detected
         
+        # Forward percept extras (viewport images, embeddings, features)
+        # into the StepResult so the API server / debug UI can use them.
+        step_extras: dict[str, Any] = {}
+        if hasattr(percept, "extras") and percept.extras:
+            step_extras.update(percept.extras)
+        # Also include the raw viewport image from the sensor frame
+        if frame.raw_data and "image_bytes_b64" in frame.raw_data:
+            step_extras.setdefault("viewport_image_b64", frame.raw_data["image_bytes_b64"])
+        # Include sensor metadata from frame extras
+        for key in ("source_file", "heading_deg", "viewport_index", "total_viewports"):
+            if key in frame.extras and key not in step_extras:
+                step_extras[key] = frame.extras[key]
+
         # Build step result for logging
         return StepResult(
             run_id=self._run_id,
@@ -220,6 +233,7 @@ class AgentOrchestrator:
             events_labeled_total=events_labeled_total,
             events_recognized_total=events_recognized_total,
             questions_asked_total=questions_asked_total,
+            extras=step_extras,
         )
 
     def _freeze_episode(self, reason: str) -> Episode:

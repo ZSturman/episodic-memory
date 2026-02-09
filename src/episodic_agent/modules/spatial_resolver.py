@@ -222,8 +222,18 @@ class LocationResolverReal(LocationResolver):
         # Extract agent position from extras for boundary tracking
         agent_pos = self._extract_agent_position(percept)
 
+        # ── Panorama-aware: only evaluate transitions at image boundaries ──
+        # Intermediate viewports of the same panorama can differ greatly;
+        # we only check for location changes on the last heading when the
+        # scene_embedding is the full panoramic average.
+        extras = percept.extras or {}
+        is_last_heading = extras.get("is_last_heading", True)  # default True for non-panorama
+
         # ── first-ever frame: bootstrap a location ──────────────────
         if self._current_location_id is None:
+            if not is_last_heading:
+                # Wait until we have the panoramic embedding to bootstrap
+                return ("unknown", 0.0)
             return self._bootstrap_first_location(embedding, agent_pos)
 
         # ── check distance to current centroid ──────────────────────
@@ -258,6 +268,17 @@ class LocationResolverReal(LocationResolver):
             return (label, confidence)
 
         # ── candidate transition ────────────────────────────────────
+        # Only count toward transition on image boundaries (last heading).
+        # Mid-sweep viewports of the same panorama may legitimately differ
+        # from the centroid without implying a location change.
+        if not is_last_heading:
+            node = self._find_node_for_location(self._current_location_id)
+            label = node.label if node else "unknown"
+            confidence = self._compute_confidence(current_fp, distance)
+            # Still emit match evaluation for dashboard visibility
+            self._emit_match_evaluation(embedding, label, confidence, distance)
+            return (label, confidence)
+
         self._transition_counter += 1
         self._candidate_embedding_buffer.append(embedding)
 
@@ -412,6 +433,31 @@ class LocationResolverReal(LocationResolver):
         if node:
             old_label = node.label
             if label != old_label:
+                # Check for label collision — auto-merge if another location
+                # already has this name (dashboard relabeling scenario).
+                existing_node, existing_lid = self._find_node_by_label(label)
+                if (
+                    existing_node
+                    and existing_lid
+                    and existing_lid != self._current_location_id
+                ):
+                    current_fp = self._fingerprints.get(self._current_location_id)
+                    if current_fp:
+                        self._merge_fingerprints(
+                            existing_lid,
+                            self._current_location_id,
+                            current_fp.centroid_embedding,
+                            current_fp.approximate_center,
+                        )
+                        self._current_location_id = existing_lid
+                        logger.info(
+                            "Dashboard label merge: %s into %s (%s)",
+                            old_label, label, existing_lid,
+                        )
+                        if self._investigation_sm:
+                            self._investigation_sm.reset_to_confident(label)
+                        return
+
                 node.labels.append(old_label)
             node.label = label
             logger.info("Dashboard label applied: %s → %s", old_label, label)
@@ -566,6 +612,31 @@ class LocationResolverReal(LocationResolver):
                 suggestions=suggestions,
             )
 
+        # Check if a location with this label already exists —
+        # offer to merge fingerprints if so (handles duplicate names).
+        existing_node, existing_lid = self._find_node_by_label(label)
+        if existing_node and existing_lid and existing_lid != location_id:
+            self._dialog_manager.notify(
+                f"⚠️  A location named '{label}' already exists "
+                f"({self._fingerprints[existing_lid].observation_count} visits)."
+            )
+            merge = self._dialog_manager.ask_label(
+                f"Merge this with existing '{label}'? (yes/no)",
+                suggestions=["yes", "no"],
+            )
+            if merge.lower().strip() in ("yes", "y"):
+                self._merge_fingerprints(existing_lid, location_id, embedding, agent_pos)
+                self._current_location_id = existing_lid
+                # Reset investigation SM
+                if self._investigation_sm:
+                    self._investigation_sm.reset_to_confident(label)
+                return existing_node
+
+        # Reset investigation SM now that we have a label —
+        # no need to keep investigating this location.
+        if self._investigation_sm:
+            self._investigation_sm.reset_to_confident(label)
+
         node = GraphNode(
             node_id=location_id,
             node_type=NodeType.LOCATION,
@@ -593,6 +664,86 @@ class LocationResolverReal(LocationResolver):
             if node.source_id == location_id or node.node_id == location_id:
                 return node
         return None
+
+    def _find_node_by_label(self, label: str) -> tuple[GraphNode | None, str | None]:
+        """Find a location node by its label.
+
+        Returns (node, location_id) or (None, None) if not found.
+        """
+        location_nodes = self._graph_store.get_nodes_by_type(NodeType.LOCATION)
+        for node in location_nodes:
+            if node.label == label:
+                lid = node.source_id or node.node_id
+                return (node, lid)
+        return (None, None)
+
+    def _merge_fingerprints(
+        self,
+        keep_id: str,
+        merge_id: str,
+        merge_embedding: list[float],
+        merge_pos: tuple[float, float, float] | None,
+    ) -> None:
+        """Merge a new fingerprint into an existing one.
+
+        Combines centroids via weighted average and accumulates
+        observation counts, entity data, and transition positions.
+        """
+        keep_fp = self._fingerprints.get(keep_id)
+        if not keep_fp:
+            logger.warning("merge_fingerprints: keep_id %s not found", keep_id)
+            return
+
+        # Weighted average of centroids
+        total = keep_fp.observation_count + 1
+        keep_fp.centroid_embedding = _running_average(
+            keep_fp.centroid_embedding,
+            merge_embedding,
+            keep_fp.observation_count,
+        )
+        keep_fp.observation_count = total
+        keep_fp.last_visited = datetime.now()
+
+        if merge_pos:
+            keep_fp.transition_positions.append(merge_pos)
+
+        # If the merge_id had a fingerprint, fold its data too
+        merge_fp = self._fingerprints.pop(merge_id, None)
+        if merge_fp:
+            # Fold observation count
+            keep_fp.observation_count += merge_fp.observation_count - 1  # -1 since we already added 1
+            # Merge entity data
+            for guid in merge_fp.entity_guids_seen:
+                if guid not in keep_fp.entity_guids_seen:
+                    keep_fp.entity_guids_seen.append(guid)
+            for guid, count in merge_fp.entity_cooccurrence_counts.items():
+                keep_fp.entity_cooccurrence_counts[guid] = (
+                    keep_fp.entity_cooccurrence_counts.get(guid, 0) + count
+                )
+            # Merge transition positions
+            keep_fp.transition_positions.extend(merge_fp.transition_positions)
+
+        # Update graph node
+        keep_node = self._find_node_for_location(keep_id)
+        if keep_node:
+            keep_node.access_count = keep_fp.observation_count
+            keep_node.last_accessed = datetime.now()
+
+        # Clean up merge_id node from graph
+        merge_node = self._find_node_for_location(merge_id)
+        if merge_node:
+            # Add as alias
+            if keep_node and merge_id not in keep_node.labels:
+                keep_node.labels.append(merge_id)
+
+        self._dialog_manager.notify(
+            f"✅ Merged into existing location "
+            f"({keep_fp.observation_count} total visits)"
+        )
+        logger.info(
+            "Merged fingerprint %s into %s (total visits: %d)",
+            merge_id, keep_id, keep_fp.observation_count,
+        )
 
     def _load_persisted_locations(self) -> None:
         """Load previously persisted location nodes into fingerprints.

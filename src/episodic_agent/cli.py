@@ -658,7 +658,9 @@ def panorama(
     debugger = None
     if not quiet:
         from episodic_agent.modules.panorama.debug import TerminalDebugger
-        debugger = TerminalDebugger()
+        debugger = TerminalDebugger(
+            location_resolver=modules.get("location_resolver"),
+        )
 
     # Web debug UI
     debug_server = None
@@ -681,6 +683,7 @@ def panorama(
             label_request_ceiling=0.4,
             confident_match_threshold=0.7,
             plateau_threshold=0.05,
+            min_images=2,
             event_bus=event_bus,
         )
 
@@ -728,6 +731,21 @@ def panorama(
         )
         api_server.start()
         typer.echo(f"Panorama API: http://localhost:8780")
+
+        # Register CLI label callback so dashboard reflects when CLI prompts for a label
+        dm = modules.get("dialog_manager")
+        if dm and hasattr(dm, "set_on_label_callback"):
+            def _cli_label_notify(label: str) -> None:
+                """Notify the API server when the CLI receives a label."""
+                current_step = api_server.state.get_field("step") or 0
+                api_server.state.update({
+                    "cli_label_event": {
+                        "label": label,
+                        "step": current_step,
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                })
+            dm.set_on_label_callback(_cli_label_notify)
 
         # JSONL event export — subscribe to event bus and write each event
         import json as _json
@@ -832,7 +850,11 @@ def panorama(
                                 )
                                 viewport_b64 = extras.get("viewport_image_b64")
                                 feature_summary = extras.get("feature_summary")
-                                investigation_sm.update(evaluation, viewport_b64, feature_summary)
+                                source_file = extras.get("source_file")
+                                investigation_sm.update(
+                                    evaluation, viewport_b64, feature_summary,
+                                    source_file=source_file,
+                                )
 
                         api_server.update_state(
                             result,

@@ -32,9 +32,11 @@ except ImportError:  # pragma: no cover
 class TerminalDebugger:
     """Pretty-prints each orchestrator step to the terminal."""
 
-    def __init__(self) -> None:
+    def __init__(self, location_resolver: Any | None = None) -> None:
         self._console = Console() if _HAS_RICH else None
         self._step = 0
+        self._location_resolver = location_resolver
+        self._last_location_label: str | None = None
 
     def print_step(
         self,
@@ -93,6 +95,13 @@ class TerminalDebugger:
         if transition:
             self._print_transition(source_name)
             return
+
+        # Detect location change and print known locations summary
+        loc = getattr(result, "location_label", None)
+        if loc and loc != self._last_location_label and self._last_location_label is not None:
+            self._print_location_change(self._last_location_label, loc, result)
+        if loc:
+            self._last_location_label = loc
 
         if _HAS_RICH and self._console:
             self._print_rich(
@@ -176,6 +185,62 @@ class TerminalDebugger:
             )
         else:
             print(f"[{self._step:04d}] ── transition → {source} ──")
+
+    def _print_location_change(
+        self, old_label: str, new_label: str, result: Any,
+    ) -> None:
+        """Print a summary of known locations when the location changes."""
+        resolver = self._location_resolver
+        if not resolver:
+            return
+
+        # Gather all known locations with their confidence vs current embedding
+        known: list[tuple[str, float, int]] = []  # (label, confidence, visits)
+        if hasattr(resolver, "get_all_fingerprints"):
+            for lid, fp in resolver.get_all_fingerprints().items():
+                node = None
+                if hasattr(resolver, "get_location_node"):
+                    node = resolver.get_location_node(lid)
+                label = node.label if node else f"loc_{lid[:8]}"
+                visits = fp.observation_count
+                # Get current confidence
+                conf = 0.0
+                if hasattr(resolver, "_compute_confidence"):
+                    from episodic_agent.modules.spatial_resolver import _cosine_distance
+                    if fp.centroid_embedding:
+                        dist = _cosine_distance(
+                            fp.centroid_embedding,
+                            fp.centroid_embedding,  # self-dist = 0 for current
+                        )
+                        conf = resolver._compute_confidence(fp, dist)
+                known.append((label, conf, visits))
+
+        known.sort(key=lambda x: x[1], reverse=True)
+
+        if _HAS_RICH and self._console:
+            self._console.print(
+                f"[dim][{self._step:04d}][/dim] "
+                f"[bold magenta]📍 Location changed: {old_label} → {new_label}[/]"
+            )
+            if known:
+                loc_strs = [
+                    f"{lbl} ({visits} visits)"
+                    for lbl, _, visits in known
+                ]
+                self._console.print(
+                    f"         [dim]Known locations: {', '.join(loc_strs)}[/]"
+                )
+        else:
+            print(
+                f"[{self._step:04d}] 📍 Location changed: "
+                f"{old_label} → {new_label}"
+            )
+            if known:
+                loc_strs = [
+                    f"{lbl} ({visits} visits)"
+                    for lbl, _, visits in known
+                ]
+                print(f"         Known locations: {', '.join(loc_strs)}")
 
     # ------------------------------------------------------------------
     # Plain fallback
