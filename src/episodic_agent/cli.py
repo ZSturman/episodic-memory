@@ -922,6 +922,468 @@ def panorama(
 
 
 @app.command()
+def panorama_hex(
+    image_dir: Path = typer.Argument(
+        ...,
+        help="Directory containing panorama images",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+    ),
+    hex_columns: int = typer.Option(
+        20,
+        "--hex-columns",
+        help="Number of hex columns across the image (controls hex size)",
+    ),
+    max_passes: int = typer.Option(
+        5,
+        "--max-passes",
+        help="Maximum scan passes per image",
+    ),
+    output_dir: Path = typer.Option(
+        Path("runs"),
+        "--output",
+        "-o",
+        help="Output directory for run logs",
+    ),
+    memory_dir: Optional[Path] = typer.Option(
+        None,
+        "--memory-dir",
+        "-m",
+        help="Directory for persistent memory",
+    ),
+    reset_memory: bool = typer.Option(
+        False,
+        "--reset-memory",
+        help="Clear memory before starting",
+    ),
+    auto_label: bool = typer.Option(
+        False,
+        "--auto-label",
+        help="Auto-generate labels without prompting",
+    ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        "-q",
+        help="Suppress per-step output",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Enable verbose logging",
+    ),
+    debug_ui: bool = typer.Option(
+        False,
+        "--debug-ui",
+        help="Launch browser debug dashboard on port 8780",
+    ),
+    seed: int = typer.Option(42, "--seed", "-s", help="Random seed"),
+) -> None:
+    """Explore images with hex-grid scanning and adaptive focus.
+
+    Processes one image at a time through a hexagonal grid overlay.
+    Each image undergoes multi-pass adaptive scanning, then the agent
+    compares it against memory and asks the user for confirmation or
+    a new label.
+
+    Examples:
+
+        episodic-agent panorama-hex ./my_photos/
+        episodic-agent panorama-hex ./rooms/ --debug-ui --hex-columns 30
+        episodic-agent panorama-hex ./rooms/ --reset-memory
+    """
+    setup_logging(verbose)
+
+    from episodic_agent.modules.panorama.agent_control import AgentControl
+    from episodic_agent.modules.panorama.hex_scanner import HexScanner
+
+    # Run ID
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = output_dir / f"{run_id}_panorama"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_path = run_dir / "run.jsonl"
+
+    # Memory directory
+    mem_dir = memory_dir or (output_dir / "panorama_memory")
+    if reset_memory and mem_dir.exists():
+        import shutil
+        shutil.rmtree(mem_dir)
+        typer.echo(f"Cleared memory: {mem_dir}")
+    mem_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build profile overrides — use panorama profile with sensible defaults
+    overrides: dict[str, Any] = {
+        "image_dir": str(image_dir),
+        "viewport_width": 256,
+        "viewport_height": 256,
+        "headings_per_image": 1,
+    }
+    if auto_label:
+        overrides["auto_label_locations"] = True
+        overrides["auto_label_entities"] = True
+
+    try:
+        profile_config = get_profile("panorama")
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+    factory = ModuleFactory(
+        profile=profile_config,
+        run_dir=mem_dir,
+        seed=seed,
+        **overrides,
+    )
+    modules = factory.create_modules()
+
+    sensor = modules["sensor"]
+    perception = modules["perception"]
+    loc_resolver = modules["location_resolver"]
+    dialog_manager = modules["dialog_manager"]
+
+    # Agent control for pause / step
+    agent_ctrl = AgentControl()
+
+    # Configure hex scanner
+    hex_scanner = HexScanner(num_columns=hex_columns, max_passes=max_passes)
+    if hasattr(perception, "_hex_scanner"):
+        perception._hex_scanner = hex_scanner
+
+    # Observability
+    event_bus = None
+    investigation_sm = None
+    api_server = None
+
+    if debug_ui:
+        from episodic_agent.modules.panorama.event_bus import PanoramaEventBus
+        from episodic_agent.modules.panorama.investigation import InvestigationStateMachine
+        from episodic_agent.modules.panorama.api_server import PanoramaAPIServer
+        from episodic_agent.modules.panorama.replay import ReplayController
+
+        event_bus = PanoramaEventBus()
+        replay_controller = ReplayController(event_bus=event_bus)
+        investigation_sm = InvestigationStateMachine(
+            min_investigation_steps=1,
+            max_investigation_steps=5,
+            label_request_ceiling=0.4,
+            confident_match_threshold=0.7,
+            plateau_threshold=0.05,
+            min_images=1,
+            event_bus=event_bus,
+        )
+
+        if hasattr(loc_resolver, "_event_bus"):
+            loc_resolver._event_bus = event_bus
+            loc_resolver._investigation_sm = investigation_sm
+        if hasattr(perception, "_event_bus"):
+            perception._event_bus = event_bus
+
+        def _label_callback(label: str) -> None:
+            if hasattr(loc_resolver, "apply_dashboard_label"):
+                loc_resolver.apply_dashboard_label(label)
+
+        api_server = PanoramaAPIServer(
+            port=8780,
+            event_bus=event_bus,
+            location_resolver=loc_resolver,
+            perception=perception,
+            label_callback=_label_callback,
+            replay_controller=replay_controller,
+            agent_control=agent_ctrl,
+            config={
+                "mode": "hex",
+                "hex_columns": hex_columns,
+                "max_passes": max_passes,
+                "auto_label": auto_label,
+            },
+        )
+        api_server.start()
+        typer.echo(f"Panorama API: http://localhost:8780")
+
+        # JSONL event export
+        import json as _json
+        _events_path = run_dir / "events.jsonl"
+        _events_file = open(_events_path, "a", encoding="utf-8")
+
+        def _jsonl_sink(event: Any) -> None:
+            try:
+                if hasattr(event, "model_dump"):
+                    record = event.model_dump(mode="json")
+                elif hasattr(event, "dict"):
+                    record = event.dict()
+                else:
+                    record = {"raw": str(event)}
+                _events_file.write(_json.dumps(record, default=str) + "\n")
+                _events_file.flush()
+            except Exception:
+                pass
+
+        event_bus.subscribe(_jsonl_sink)
+        typer.echo(f"Events log: {_events_path}")
+
+        # Auto-start Next.js dashboard
+        dashboard_proc = None
+        dashboard_dir = Path(__file__).resolve().parent.parent.parent / "dashboard"
+        if dashboard_dir.is_dir() and (dashboard_dir / "package.json").exists():
+            import subprocess
+            node_modules = dashboard_dir / "node_modules"
+            if not node_modules.is_dir():
+                typer.echo("Installing dashboard dependencies...")
+                subprocess.run(
+                    ["npm", "install"],
+                    cwd=str(dashboard_dir),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            dashboard_proc = subprocess.Popen(
+                ["npm", "run", "dev"],
+                cwd=str(dashboard_dir),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            typer.echo(f"Dashboard: http://localhost:3000")
+
+    # Header
+    if not quiet:
+        typer.echo("Episodic Memory Agent — Hex-Grid Panorama")
+        typer.echo(f"Images: {image_dir}  ({sensor.source_count} sources)")
+        typer.echo(f"Hex columns: {hex_columns}, Max passes: {max_passes}")
+        typer.echo(f"Memory: {mem_dir}")
+        typer.echo(f"Run ID: {run_id}")
+        typer.echo("-" * 60)
+
+    image_count = 0
+
+    try:
+        while True:
+            # Get current full image
+            img_rgb = sensor.get_current_image()
+            if img_rgb is None:
+                break
+
+            image_count += 1
+            source_name = sensor.current_source_name or f"image_{image_count}"
+            remaining = sensor.peek_remaining()
+
+            if not quiet:
+                typer.echo(
+                    f"\n{'='*60}\n"
+                    f"Image {image_count}/{sensor.source_count}: {source_name}"
+                    f"  ({remaining} remaining)\n"
+                    f"{'='*60}"
+                )
+
+            # Check pause / step
+            agent_ctrl.wait_if_paused()
+
+            # Run hex scan on this image
+            if not quiet:
+                typer.echo("Scanning with hex grid...")
+            percept = perception.process_image(img_rgb, source_name=source_name)
+
+            # Show scan summary
+            hex_data = percept.extras or {}
+            if not quiet:
+                typer.echo(
+                    f"  Scan complete: {hex_data.get('hex_cell_count', 0)} cells, "
+                    f"{hex_data.get('scan_passes', 0)} passes, "
+                    f"confidence={percept.confidence:.2f}"
+                )
+
+            # Compare against memory
+            embedding = percept.scene_embedding
+            match_result = None
+            if hasattr(loc_resolver, "resolve_hex_image") and embedding:
+                match_result = loc_resolver.resolve_hex_image(embedding)
+
+            loc_id, parent_label, variant_label, match_conf = (
+                match_result if match_result else (None, "unknown", "", 0.0)
+            )
+
+            # Present hypothesis to user
+            if not quiet:
+                if loc_id and match_conf > 0.3:
+                    full_label = (
+                        f"{parent_label} - {variant_label}"
+                        if variant_label
+                        else parent_label
+                    )
+                    typer.echo(
+                        f"\n  Hypothesis: This looks like '{full_label}' "
+                        f"(confidence: {match_conf:.0%})"
+                    )
+                else:
+                    typer.echo("\n  No match found — this appears to be a new location.")
+
+            # User interaction
+            reconstruction_data = hex_data.get("reconstruction_data", {})
+
+            if auto_label:
+                # Auto-label mode — confirm hypothesis or create new
+                if loc_id and match_conf > 0.5:
+                    loc_resolver.update_hex_location(
+                        loc_id, embedding, reconstruction_data
+                    )
+                    if not quiet:
+                        typer.echo(f"  Auto-confirmed: {parent_label}")
+                else:
+                    new_label = f"location_{image_count}"
+                    loc_resolver.create_hex_location(
+                        embedding, new_label, "", reconstruction_data
+                    )
+                    if not quiet:
+                        typer.echo(f"  Auto-labeled: {new_label}")
+            elif debug_ui:
+                # Dashboard mode — wait for user response via API
+                if not quiet:
+                    typer.echo("  Waiting for label from dashboard...")
+                response = agent_ctrl.wait_for_user_response(timeout=None)
+                _apply_user_response(
+                    response, loc_id, loc_resolver, embedding,
+                    reconstruction_data, parent_label, variant_label, quiet,
+                )
+            else:
+                # CLI interactive mode
+                _cli_label_prompt(
+                    loc_id, loc_resolver, embedding, reconstruction_data,
+                    parent_label, variant_label, match_conf, quiet,
+                )
+
+            # Advance to next image
+            if not sensor.advance_to_next_image():
+                break
+
+    except KeyboardInterrupt:
+        if not quiet:
+            typer.echo("\n" + "-" * 60)
+            typer.echo("Interrupted by user")
+
+    finally:
+        sensor.stop()
+        if api_server:
+            api_server.stop()
+        if 'dashboard_proc' in dir() and dashboard_proc and dashboard_proc.poll() is None:
+            dashboard_proc.terminate()
+            dashboard_proc.wait(timeout=5)
+        if '_events_file' in dir() and _events_file and not _events_file.closed:
+            _events_file.close()
+
+    # Summary
+    if not quiet:
+        typer.echo("-" * 60)
+        typer.echo(f"Processed {image_count} images")
+        typer.echo(f"Memory: {mem_dir}")
+
+        if hasattr(loc_resolver, "get_all_fingerprints"):
+            fps = loc_resolver.get_all_fingerprints()
+            typer.echo(f"\nLearned locations ({len(fps)}):")
+            for lid, fp in fps.items():
+                full = (
+                    f"{fp.parent_label} - {fp.variant_label}"
+                    if fp.variant_label
+                    else fp.parent_label
+                )
+                typer.echo(f"  - {full} (observations: {fp.observation_count})")
+
+
+def _apply_user_response(
+    response: dict[str, str],
+    loc_id: str | None,
+    loc_resolver: Any,
+    embedding: list[float],
+    reconstruction_data: dict[str, Any],
+    parent_label: str,
+    variant_label: str,
+    quiet: bool,
+) -> None:
+    """Apply a user response from the dashboard to memory."""
+    action = response.get("response", "skip")
+
+    if action == "confirm" and loc_id:
+        loc_resolver.update_hex_location(loc_id, embedding, reconstruction_data)
+        if not quiet:
+            typer.echo(f"  Confirmed: {parent_label}")
+
+    elif action == "new_label":
+        new_parent = response.get("label", "unknown")
+        new_variant = response.get("variant", "")
+        loc_resolver.create_hex_location(
+            embedding, new_parent, new_variant, reconstruction_data
+        )
+        if not quiet:
+            full = f"{new_parent} - {new_variant}" if new_variant else new_parent
+            typer.echo(f"  New label: {full}")
+
+    elif action == "same_place_different" and loc_id:
+        new_variant = response.get("variant", "variant")
+        loc_resolver.apply_label_with_variant(loc_id, parent_label, new_variant)
+        loc_resolver.update_hex_location(loc_id, embedding, reconstruction_data)
+        if not quiet:
+            typer.echo(f"  Variant added: {parent_label} - {new_variant}")
+
+    elif action == "reject":
+        new_parent = response.get("label", "unknown")
+        new_variant = response.get("variant", "")
+        loc_resolver.create_hex_location(
+            embedding, new_parent, new_variant, reconstruction_data
+        )
+        if not quiet:
+            typer.echo(f"  Rejected hypothesis, new label: {new_parent}")
+
+    else:
+        if not quiet:
+            typer.echo("  Skipped.")
+
+
+def _cli_label_prompt(
+    loc_id: str | None,
+    loc_resolver: Any,
+    embedding: list[float],
+    reconstruction_data: dict[str, Any],
+    parent_label: str,
+    variant_label: str,
+    match_conf: float,
+    quiet: bool,
+) -> None:
+    """Interactive CLI label prompt."""
+    if loc_id and match_conf > 0.3:
+        full = f"{parent_label} - {variant_label}" if variant_label else parent_label
+        typer.echo(f"\n  The agent thinks this is: {full} ({match_conf:.0%})")
+        typer.echo("  [c] Confirm  [n] New label  [v] Same place, different variant  [s] Skip")
+        choice = input("  > ").strip().lower()
+
+        if choice == "c":
+            loc_resolver.update_hex_location(loc_id, embedding, reconstruction_data)
+            if not quiet:
+                typer.echo(f"  Confirmed: {full}")
+        elif choice == "n":
+            new_parent = input("  Parent label: ").strip() or "unknown"
+            new_variant = input("  Variant (optional): ").strip()
+            loc_resolver.create_hex_location(
+                embedding, new_parent, new_variant, reconstruction_data
+            )
+        elif choice == "v":
+            new_variant = input("  Variant description: ").strip()
+            loc_resolver.apply_label_with_variant(loc_id, parent_label, new_variant)
+            loc_resolver.update_hex_location(loc_id, embedding, reconstruction_data)
+        else:
+            if not quiet:
+                typer.echo("  Skipped.")
+    else:
+        typer.echo("\n  New location detected. Please provide a label:")
+        new_parent = input("  Parent label: ").strip() or "unknown"
+        new_variant = input("  Variant (optional): ").strip()
+        loc_resolver.create_hex_location(
+            embedding, new_parent, new_variant, reconstruction_data
+        )
+        if not quiet:
+            full = f"{new_parent} - {new_variant}" if new_variant else new_parent
+            typer.echo(f"  Labeled: {full}")
+
+
+@app.command()
 def profiles() -> None:
     """List available profiles."""
     typer.echo("Available profiles:\n")

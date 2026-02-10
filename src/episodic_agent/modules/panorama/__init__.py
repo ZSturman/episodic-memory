@@ -14,6 +14,9 @@ Components:
 - PanoramaEventBus: Structured event backbone for observability
 - InvestigationStateMachine: Adaptive label-gating logic
 - PanoramaAPIServer: JSON API for the Next.js dashboard
+- HexGrid / HexCell: Axial-coordinate hex overlay for structured image scanning
+- HexFeatureExtractor / HexScanner: Multi-pass adaptive hex-grid scanning
+- AgentControl: Thread-safe pause/step/advance control interface
 """
 
 from episodic_agent.modules.panorama.sensor_provider import PanoramaSensorProvider
@@ -22,6 +25,11 @@ from episodic_agent.modules.panorama.perception import PanoramaPerception
 from episodic_agent.modules.panorama.saccade import SaccadePolicy
 from episodic_agent.modules.panorama.event_bus import PanoramaEventBus
 from episodic_agent.modules.panorama.investigation import InvestigationStateMachine
+from episodic_agent.modules.panorama.hex_grid import HexCoord, build_hex_grid, hex_size_from_image
+from episodic_agent.modules.panorama.hex_cell import HexCell, FocusProfile
+from episodic_agent.modules.panorama.hex_feature_extractor import HexFeatureExtractor, HexScanResult
+from episodic_agent.modules.panorama.hex_scanner import HexScanner, ScanState
+from episodic_agent.modules.panorama.agent_control import AgentControl, UserResponse
 
 __all__ = [
     "PanoramaSensorProvider",
@@ -30,4 +38,15 @@ __all__ = [
     "SaccadePolicy",
     "PanoramaEventBus",
     "InvestigationStateMachine",
+    "HexCoord",
+    "build_hex_grid",
+    "hex_size_from_image",
+    "HexCell",
+    "FocusProfile",
+    "HexFeatureExtractor",
+    "HexScanResult",
+    "HexScanner",
+    "ScanState",
+    "AgentControl",
+    "UserResponse",
 ]

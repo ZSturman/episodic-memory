@@ -20,6 +20,11 @@ const PANEL_LABELS: Record<keyof PanelVisibility, string> = {
   similarityHeatmap: "Similarity Heatmap",
   embeddingVariance: "Embedding Variance",
   replayControls: "Replay Controls",
+  hexGrid: "Hex Grid",
+  hexControl: "Hex Control",
+  agentControl: "Agent Control",
+  reconstruction: "Reconstruction",
+  labelConfirm: "Label Confirm",
 };
 
 interface SidebarProps {

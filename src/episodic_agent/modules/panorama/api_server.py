@@ -172,6 +172,7 @@ class _APIHandler(BaseHTTPRequestHandler):
     _config: dict[str, Any]
     _label_callback: Any  # Callable[[str], None] | None
     _replay_controller: Any  # ReplayController | None
+    _agent_control: Any  # AgentControl | None
 
     def log_message(self, format: str, *args: Any) -> None:
         pass  # Suppress default stderr
@@ -240,6 +241,15 @@ class _APIHandler(BaseHTTPRequestHandler):
             self._handle_replay_runs()
         elif path == "/api/source-image":
             self._handle_source_image()
+        elif path == "/api/hex/scan":
+            self._handle_hex_scan()
+        elif path == "/api/hex/focus":
+            self._handle_hex_focus_get()
+        elif path == "/api/control/status":
+            self._handle_control_status()
+        elif path.startswith("/api/reconstruction/"):
+            lid = path.split("/api/reconstruction/")[1]
+            self._handle_reconstruction(lid)
         else:
             self._send_html(_FALLBACK_HTML)
 
@@ -251,6 +261,18 @@ class _APIHandler(BaseHTTPRequestHandler):
             self._handle_replay_load()
         elif path == "/api/replay/control":
             self._handle_replay_control()
+        elif path == "/api/control/pause":
+            self._handle_control_pause()
+        elif path == "/api/control/step":
+            self._handle_control_step()
+        elif path == "/api/control/advance":
+            self._handle_control_advance()
+        elif path == "/api/control/auto-focus":
+            self._handle_control_auto_focus()
+        elif path == "/api/hex/focus":
+            self._handle_hex_focus_post()
+        elif path == "/api/hex/label":
+            self._handle_hex_label_post()
         else:
             self._send_json({"error": "Not found"}, 404)
 
@@ -768,6 +790,181 @@ class _APIHandler(BaseHTTPRequestHandler):
         self._send_json({"status": "ok", "action": action, **rc.get_state()})
 
     # ------------------------------------------------------------------
+    # Hex-grid endpoint handlers
+    # ------------------------------------------------------------------
+
+    def _handle_hex_scan(self) -> None:
+        """GET /api/hex/scan — current hex scan result."""
+        perception = self._perception
+        if not perception or not hasattr(perception, "last_hex_result"):
+            self._send_json({"scan": None})
+            return
+        result = perception.last_hex_result
+        if result is None:
+            self._send_json({"scan": None})
+            return
+
+        # Enrich with scanner state
+        converged = False
+        focus_center = None
+        if hasattr(perception, "hex_scanner"):
+            scanner = perception.hex_scanner
+            status = scanner.get_status()
+            converged = status.get("state") == "converged"
+            fp = status.get("focus_profile")
+            if fp and hasattr(fp, "center"):
+                focus_center = (fp.center.q, fp.center.r)
+
+        self._send_json({"scan": result.to_api_dict(
+            converged=converged,
+            focus_center=focus_center,
+        )})
+
+    def _handle_hex_focus_get(self) -> None:
+        """GET /api/hex/focus — current focus profile."""
+        perception = self._perception
+        if not perception or not hasattr(perception, "hex_scanner"):
+            self._send_json({"focus": None})
+            return
+        scanner = perception.hex_scanner
+        status = scanner.get_status()
+        self._send_json({
+            "focus": status.get("focus_profile"),
+            "auto_focus": status.get("auto_focus", True),
+            "state": status.get("state", "idle"),
+        })
+
+    def _handle_hex_focus_post(self) -> None:
+        """POST /api/hex/focus — update focus profile from dashboard."""
+        body = self._read_json_body()
+        if not body:
+            self._send_json({"error": "invalid body"}, 400)
+            return
+
+        perception = self._perception
+        if not perception or not hasattr(perception, "hex_scanner"):
+            self._send_json({"error": "hex scanner not available"}, 404)
+            return
+
+        # Apply via agent control if available
+        ctrl = self._agent_control
+        if ctrl:
+            ctrl.set_focus_override(body)
+        else:
+            # Direct apply to scanner
+            from episodic_agent.modules.panorama.hex_cell import FocusProfile
+            from episodic_agent.modules.panorama.hex_grid import HexCoord
+            center = HexCoord(body.get("center_q", 0), body.get("center_r", 0))
+            fp = FocusProfile(
+                center=center,
+                fovea_radius=body.get("fovea_radius", 1),
+                mid_radius=body.get("mid_radius", 3),
+                outer_radius=body.get("outer_radius", 6),
+            )
+            perception.hex_scanner.set_focus_profile(fp)
+
+        self._send_json({"status": "ok"})
+
+    def _handle_hex_label_post(self) -> None:
+        """POST /api/hex/label — submit a structured label response."""
+        body = self._read_json_body()
+        if not body:
+            self._send_json({"error": "invalid body"}, 400)
+            return
+
+        ctrl = self._agent_control
+        if ctrl:
+            ctrl.submit_user_response(
+                response=body.get("response", "skip"),
+                label=body.get("parent_label", body.get("label", "")),
+                variant=body.get("variant_label", body.get("variant", "")),
+            )
+            self._send_json({"status": "ok"})
+        else:
+            # Fallback: apply directly via label callback
+            if self._label_callback:
+                label = body.get("label", "")
+                variant = body.get("variant", "")
+                full = f"{label} - {variant}" if variant else label
+                self._label_callback(full)
+            self._send_json({"status": "ok", "fallback": True})
+
+    def _handle_control_status(self) -> None:
+        """GET /api/control/status — agent control state."""
+        ctrl = self._agent_control
+        if not ctrl:
+            self._send_json({"paused": False, "awaiting_user": False, "auto_focus": True})
+            return
+        self._send_json(ctrl.get_status())
+
+    def _handle_control_pause(self) -> None:
+        """POST /api/control/pause — toggle pause."""
+        ctrl = self._agent_control
+        if not ctrl:
+            self._send_json({"error": "no agent control"}, 404)
+            return
+        new_state = ctrl.toggle_pause()
+        self._send_json({"paused": new_state})
+
+    def _handle_control_step(self) -> None:
+        """POST /api/control/step — single step while paused."""
+        ctrl = self._agent_control
+        if not ctrl:
+            self._send_json({"error": "no agent control"}, 404)
+            return
+        ctrl.request_step()
+        self._send_json({"status": "ok"})
+
+    def _handle_control_advance(self) -> None:
+        """POST /api/control/advance — advance to next image."""
+        ctrl = self._agent_control
+        if not ctrl:
+            self._send_json({"error": "no agent control"}, 404)
+            return
+        ctrl.request_advance()
+        self._send_json({"status": "ok"})
+
+    def _handle_control_auto_focus(self) -> None:
+        """POST /api/control/auto-focus — toggle auto/manual focus."""
+        body = self._read_json_body()
+        ctrl = self._agent_control
+        if not ctrl:
+            self._send_json({"error": "no agent control"}, 404)
+            return
+        enabled = body.get("enabled", True) if body else True
+        ctrl.set_auto_focus(enabled)
+        self._send_json({"auto_focus": enabled})
+
+    def _handle_reconstruction(self, location_id: str) -> None:
+        """GET /api/reconstruction/:id — hex reconstruction data for a location."""
+        resolver = self._location_resolver
+        if not resolver or not hasattr(resolver, "get_reconstruction_data"):
+            self._send_json({"error": "not available"}, 404)
+            return
+        data = resolver.get_reconstruction_data(location_id)
+        if not data:
+            self._send_json({"error": "no reconstruction data"}, 404)
+            return
+        # Enrich with fingerprint metadata
+        fp = resolver.get_location_fingerprint(location_id)
+        if fp:
+            data["parent_label"] = getattr(fp, "parent_label", "unknown")
+            data["variant_label"] = getattr(fp, "variant_label", "")
+            data["observation_count"] = fp.observation_count
+        self._send_json({"reconstruction": data})
+
+    def _read_json_body(self) -> dict[str, Any] | None:
+        """Read and parse a JSON request body."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length == 0:
+                return {}
+            raw = self.rfile.read(length)
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
@@ -815,6 +1012,7 @@ class PanoramaAPIServer:
         config: dict[str, Any] | None = None,
         label_callback: Any = None,
         replay_controller: Any = None,
+        agent_control: Any = None,
     ) -> None:
         self.port = port
         self.state = PanoramaAPIState()
@@ -824,6 +1022,7 @@ class PanoramaAPIServer:
         self._config = config or {}
         self._label_callback = label_callback
         self._replay_controller = replay_controller
+        self._agent_control = agent_control
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -836,6 +1035,7 @@ class PanoramaAPIServer:
         _APIHandler._config = self._config
         _APIHandler._label_callback = self._label_callback
         _APIHandler._replay_controller = self._replay_controller
+        _APIHandler._agent_control = self._agent_control
 
         self._server = HTTPServer(("", self.port), _APIHandler)
         self._thread = threading.Thread(

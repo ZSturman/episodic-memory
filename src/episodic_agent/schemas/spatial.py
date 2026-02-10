@@ -264,10 +264,26 @@ class LocationFingerprint(BaseModel):
         description="Unique identifier for this discovered location",
     )
     
+    # Labels — structured parent + variant
+    parent_label: str = Field(
+        default="unknown",
+        description="Primary location label (e.g. 'office', 'kitchen')",
+    )
+    variant_label: str = Field(
+        default="",
+        description="Sub-label variant (e.g. 'corner with windows', 'near fridge')",
+    )
+    
     # Centroid fingerprint (average scene embedding across observations)
     centroid_embedding: list[float] = Field(
         default_factory=list,
         description="Average scene embedding for this location (centroid)",
+    )
+    
+    # Hex reconstruction data — saved per-cell features for visual rebuild
+    hex_reconstruction_data: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Per-hex-cell feature data for location reconstruction",
     )
     
     # Observation statistics

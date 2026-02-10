@@ -47,6 +47,15 @@ class PanoramaAgentState(str, Enum):
     label_request = "label_request"
     """Agent is requesting a label from the user (evidence bundle ready)."""
 
+    scanning_image = "scanning_image"
+    """Hex-scan in progress — iterative focus refinement."""
+
+    awaiting_user = "awaiting_user"
+    """Scan complete, hypothesis ready — waiting for user confirmation."""
+
+    paused = "paused"
+    """Agent paused by dashboard control."""
+
 
 # =====================================================================
 # Event types
@@ -61,6 +70,19 @@ class PanoramaEventType(str, Enum):
     investigation_window = "investigation_window"
     label_request = "label_request"
     memory_write = "memory_write"
+
+    # Hex-grid events
+    hex_scan_started = "hex_scan_started"
+    hex_scan_pass = "hex_scan_pass"
+    hex_scan_complete = "hex_scan_complete"
+    focus_update = "focus_update"
+    agent_paused = "agent_paused"
+    agent_resumed = "agent_resumed"
+    agent_step = "agent_step"
+    image_advanced = "image_advanced"
+    user_label_confirmed = "user_label_confirmed"
+    user_label_rejected = "user_label_rejected"
+    reconstruction_requested = "reconstruction_requested"
 
 
 # =====================================================================
@@ -155,6 +177,50 @@ class StateTransitionPayload(BaseModel):
     reason: str = ""
     confidence: float = 0.0
     steps_in_previous: int = 0
+
+
+class HexScanPayload(BaseModel):
+    """Payload for hex_scan_started / hex_scan_pass / hex_scan_complete."""
+
+    source_file: str = ""
+    scan_pass: int = 0
+    total_cells: int = 0
+    cells_at_detail: dict[str, int] = Field(default_factory=dict)
+    converged: bool = False
+    interest_max: float = 0.0
+    interest_mean: float = 0.0
+    embedding_norm: float = 0.0
+
+
+class FocusUpdatePayload(BaseModel):
+    """Payload for focus_update events."""
+
+    center_q: int = 0
+    center_r: int = 0
+    fovea_radius: int = 1
+    mid_radius: int = 3
+    outer_radius: int = 6
+    auto_focus: bool = True
+    source: str = "auto"  # "auto" | "manual" | "dashboard"
+
+
+class AgentControlPayload(BaseModel):
+    """Payload for agent_paused / agent_resumed / agent_step."""
+
+    reason: str = ""
+    image_index: int = 0
+    total_images: int = 0
+    current_file: str = ""
+
+
+class UserLabelPayload(BaseModel):
+    """Payload for user_label_confirmed / user_label_rejected."""
+
+    location_id: str = ""
+    parent_label: str = ""
+    variant_label: str = ""
+    response_type: str = ""  # confirm | reject | new_label | same_place_different
+    confidence: float = 0.0
 
 
 # =====================================================================

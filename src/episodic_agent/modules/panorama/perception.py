@@ -1,15 +1,20 @@
-"""Panorama perception module — converts viewport crops into Percepts.
+"""Panorama perception module — converts images into Percepts.
 
-Implements the PerceptionModule ABC.  Decodes the JPEG viewport from
-``SensorFrame.raw_data``, runs feature extraction via
-PanoramaFeatureExtractor, and produces a ``Percept`` with a 128-dim
-``scene_embedding``.
+Implements the PerceptionModule ABC.  Two modes of operation:
 
-Maintains a rolling buffer of per-heading embeddings for each source
-image.  When the agent finishes sweeping one image, the accumulated
-panoramic embedding (element-wise mean) is stored in
-``percept.extras["panoramic_embedding"]`` on the final heading's
-Percept so that the location resolver can fingerprint on the full view.
+1. **Viewport mode (legacy)**: Decodes the JPEG viewport from
+   ``SensorFrame.raw_data``, runs feature extraction via
+   PanoramaFeatureExtractor, and produces a ``Percept`` with a 128-dim
+   ``scene_embedding``.  Maintains a rolling buffer of per-heading
+   embeddings that are combined into a panoramic embedding when the
+   sweep finishes.
+
+2. **Hex-grid mode**: Receives a full image (as an RGB numpy array)
+   and delegates scanning to ``HexScanner``.  Each call to
+   ``process_image()`` performs a multi-pass adaptive hex scan and
+   returns a single Percept whose embedding is derived from the
+   weighted hex cells.  No heading accumulation — one image = one
+   observation.
 
 No hidden ground-truth: the embedding is derived entirely from
 visual features (colour histograms, edge histograms, brightness).
@@ -31,6 +36,8 @@ from PIL import Image
 
 from episodic_agent.core.interfaces import PerceptionModule
 from episodic_agent.modules.panorama.feature_extractor import PanoramaFeatureExtractor
+from episodic_agent.modules.panorama.hex_scanner import HexScanner
+from episodic_agent.modules.panorama.hex_feature_extractor import HexScanResult
 from episodic_agent.schemas.frames import Percept, SensorFrame
 from episodic_agent.schemas.panorama_events import (
     PanoramaAgentState,
@@ -65,7 +72,11 @@ class PanoramaPerception(PerceptionModule):
         self._event_bus: PanoramaEventBus | None = event_bus
         self._investigation_sm: Any = None  # injected post-hoc
 
-        # Rolling buffer of embeddings for one source image
+        # Hex scanner (created lazily on first hex-mode call)
+        self._hex_scanner: HexScanner | None = None
+        self._last_hex_result: HexScanResult | None = None
+
+        # Rolling buffer of embeddings for one source image (viewport mode)
         self._heading_embeddings: list[list[float]] = []
         self._current_source: str | None = None
         self._steps = 0
@@ -80,6 +91,135 @@ class PanoramaPerception(PerceptionModule):
 
         # Accumulated features for current image (for debug)
         self._accumulated_features: list[ExtractedVisualFeatures] = []
+
+    # ------------------------------------------------------------------
+    # Hex-grid mode
+    # ------------------------------------------------------------------
+
+    @property
+    def hex_scanner(self) -> HexScanner:
+        """Lazy-init the hex scanner."""
+        if self._hex_scanner is None:
+            self._hex_scanner = HexScanner()
+        return self._hex_scanner
+
+    @property
+    def last_hex_result(self) -> HexScanResult | None:
+        """Last hex scan result, for API/dashboard inspection."""
+        return self._last_hex_result
+
+    def process_image(
+        self,
+        img_rgb: np.ndarray,
+        source_name: str = "",
+    ) -> Percept:
+        """Process a full image via hex-grid scanning.
+
+        This is the primary entry point for the hex pipeline.  It runs
+        a multi-pass adaptive scan and produces a single Percept whose
+        ``scene_embedding`` is the weighted 128-dim hex embedding.
+
+        Parameters
+        ----------
+        img_rgb : np.ndarray
+            Full-resolution image in RGB format (H, W, 3).
+        source_name : str
+            Filename for logging / event tracking.
+
+        Returns
+        -------
+        Percept
+            Single percept summarising the entire image.
+        """
+        self._steps += 1
+        self._current_source = source_name
+
+        # Run multi-pass hex scan
+        result = self.hex_scanner.scan_image(img_rgb)
+        self._last_hex_result = result
+
+        # Extract 128-dim embedding
+        embedding = result.to_embedding()
+
+        # Interest analysis for confidence
+        interest = result.interest_map()
+        max_interest = max(interest.values()) if interest else 0.0
+        mean_interest = (
+            sum(interest.values()) / len(interest) if interest else 0.0
+        )
+        confidence = min(1.0, 0.3 + mean_interest * 0.4 + max_interest * 0.3)
+
+        # Reconstruction data for storage
+        reconstruction_data = result.to_reconstruction_data()
+
+        percept = Percept(
+            percept_id=str(uuid.uuid4()),
+            source_frame_id=self._steps,
+            timestamp=datetime.now(),
+            scene_embedding=embedding,
+            candidates=[],
+            confidence=confidence,
+            extras={
+                "source_file": source_name,
+                "hex_scan": True,
+                "scan_passes": self.hex_scanner._pass_number,
+                "hex_cell_count": len(result.cells),
+                "interest_max": max_interest,
+                "interest_mean": mean_interest,
+                "reconstruction_data": reconstruction_data,
+                "hex_api_data": result.to_api_dict(),
+                "camera_pose": {
+                    "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "forward": [1.0, 0.0, 0.0],
+                },
+                "hypothesis": dict(self.hypothesis),
+            },
+        )
+
+        # Emit event
+        self._emit_hex_perception_update(percept, result, source_name)
+
+        return percept
+
+    def _emit_hex_perception_update(
+        self,
+        percept: Percept,
+        result: HexScanResult,
+        source_file: str,
+    ) -> None:
+        """Emit perception_update for a hex scan."""
+        if not self._event_bus:
+            return
+
+        emb = percept.scene_embedding
+        emb_norm = math.sqrt(sum(v * v for v in emb)) if emb else 0.0
+
+        payload = PerceptionPayload(
+            confidence=percept.confidence,
+            feature_summary={
+                "hex_cell_count": len(result.cells),
+                "scan_passes": self.hex_scanner._pass_number,
+            },
+            heading_index=0,
+            total_headings=1,
+            heading_deg=0.0,
+            is_panoramic_complete=True,
+            embedding_norm=emb_norm,
+            source_file=source_file,
+        )
+
+        event = PanoramaEvent(
+            event_type=PanoramaEventType.perception_update,
+            timestamp=datetime.now(),
+            step=self._steps,
+            state=(
+                self._investigation_sm.state
+                if self._investigation_sm
+                else PanoramaAgentState.investigating_unknown
+            ),
+            payload=payload.model_dump(),
+        )
+        self._event_bus.emit(event)
 
     # ------------------------------------------------------------------
     # PerceptionModule ABC

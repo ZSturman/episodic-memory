@@ -469,6 +469,208 @@ class LocationResolverReal(LocationResolver):
             self._investigation_sm.reset_to_confident(label)
 
     # ------------------------------------------------------------------
+    # Hex-pipeline sub-label support
+    # ------------------------------------------------------------------
+
+    def apply_label_with_variant(
+        self,
+        location_id: str,
+        parent_label: str,
+        variant_label: str = "",
+    ) -> None:
+        """Apply a structured label (parent + variant) to a location.
+
+        Updates both the graph node label and the fingerprint's
+        parent_label / variant_label fields.
+        """
+        fp = self._fingerprints.get(location_id)
+        if fp:
+            fp.parent_label = parent_label
+            fp.variant_label = variant_label
+
+        node = self._find_node_for_location(location_id)
+        if node:
+            full_label = (
+                f"{parent_label} - {variant_label}" if variant_label else parent_label
+            )
+            if full_label != node.label:
+                node.labels.append(node.label)
+            node.label = full_label
+            logger.info("Sub-label applied: %s / %s", parent_label, variant_label)
+        else:
+            logger.warning("apply_label_with_variant: no node for %s", location_id)
+
+        if self._investigation_sm:
+            full = f"{parent_label} - {variant_label}" if variant_label else parent_label
+            self._investigation_sm.reset_to_confident(full)
+
+    def store_hex_reconstruction(
+        self,
+        location_id: str,
+        reconstruction_data: dict[str, Any],
+    ) -> None:
+        """Store hex reconstruction data for a location fingerprint.
+
+        Called after each image is labeled so that the reconstruction
+        panel can rebuild the visual appearance of the location.
+        """
+        fp = self._fingerprints.get(location_id)
+        if not fp:
+            logger.warning("store_hex_reconstruction: unknown location %s", location_id)
+            return
+        fp.hex_reconstruction_data = reconstruction_data
+
+    def get_reconstruction_data(self, location_id: str) -> dict[str, Any]:
+        """Get hex reconstruction data for a location."""
+        fp = self._fingerprints.get(location_id)
+        if not fp:
+            return {}
+        return fp.hex_reconstruction_data
+
+    def resolve_hex_image(
+        self,
+        embedding: list[float],
+    ) -> tuple[str | None, str, str, float]:
+        """Match a hex-scan embedding against known fingerprints.
+
+        Returns
+        -------
+        (location_id, parent_label, variant_label, confidence)
+        location_id is None if no match is found (genuinely new location).
+        """
+        best_id: str | None = None
+        best_dist = float("inf")
+
+        for lid, fp in self._fingerprints.items():
+            if not fp.centroid_embedding:
+                continue
+            dist = _cosine_distance(embedding, fp.centroid_embedding)
+            if dist < best_dist:
+                best_dist = dist
+                best_id = lid
+
+        if best_id is None or best_dist > self._match_threshold:
+            return (None, "unknown", "", 0.0)
+
+        fp = self._fingerprints[best_id]
+        best_conf = self._compute_confidence(fp, best_dist)
+        return (best_id, fp.parent_label, fp.variant_label, best_conf)
+
+    def create_hex_location(
+        self,
+        embedding: list[float],
+        parent_label: str,
+        variant_label: str = "",
+        reconstruction_data: dict[str, Any] | None = None,
+    ) -> str:
+        """Create a new location from a hex-scan result.
+
+        This method bypasses the interactive dialog_manager prompts
+        because the hex dashboard flow already collected the label
+        from the user via the API.
+
+        Returns the new location_id.
+        """
+        location_id = f"loc_fp_{uuid.uuid4().hex[:12]}"
+
+        full_label = (
+            f"{parent_label} - {variant_label}" if variant_label else parent_label
+        )
+
+        # Check for existing location with same label and merge silently
+        existing_node, existing_lid = self._find_node_by_label(full_label)
+        if existing_node and existing_lid:
+            # Merge with existing — update the fingerprint
+            existing_fp = self._fingerprints.get(existing_lid)
+            if existing_fp:
+                existing_fp.centroid_embedding = _running_average(
+                    existing_fp.centroid_embedding, embedding, existing_fp.observation_count
+                )
+                existing_fp.observation_count += 1
+                existing_fp.last_visited = datetime.now()
+                if reconstruction_data:
+                    existing_fp.hex_reconstruction_data = reconstruction_data
+                self._current_location_id = existing_lid
+                self._last_seen_step[existing_lid] = self._step_counter
+                logger.info("Hex location merged into existing: %s (%s)", full_label, existing_lid)
+                self._emit_memory_write(existing_lid, full_label, is_new=False, observation_count=existing_fp.observation_count)
+                return existing_lid
+
+        fp = LocationFingerprint(
+            location_id=location_id,
+            parent_label=parent_label,
+            variant_label=variant_label,
+            centroid_embedding=list(embedding),
+            observation_count=1,
+            hex_reconstruction_data=reconstruction_data or {},
+            first_visited=datetime.now(),
+            last_visited=datetime.now(),
+        )
+        self._fingerprints[location_id] = fp
+        self._current_location_id = location_id
+        self._first_seen_step[location_id] = self._step_counter
+        self._last_seen_step[location_id] = self._step_counter
+
+        # Create the graph node directly — no interactive prompts
+        node = GraphNode(
+            node_id=location_id,
+            node_type=NodeType.LOCATION,
+            label=full_label,
+            labels=[],
+            embedding=embedding[:self._embedding_dim] if len(embedding) > self._embedding_dim else embedding,
+            source_id=location_id,
+            confidence=CONFIDENCE_T_LOW,
+            created_at=datetime.now(),
+            last_accessed=datetime.now(),
+            access_count=1,
+            extras={
+                "source": "hex_fingerprint",
+            },
+        )
+        self._graph_store.add_node(node)
+
+        if self._investigation_sm:
+            self._investigation_sm.reset_to_confident(full_label)
+
+        logger.info("Hex location created: %s (%s)", full_label, location_id)
+        self._emit_memory_write(location_id, full_label, is_new=True)
+        return location_id
+
+    def update_hex_location(
+        self,
+        location_id: str,
+        embedding: list[float],
+        reconstruction_data: dict[str, Any] | None = None,
+    ) -> None:
+        """Update an existing location with a new hex observation."""
+        fp = self._fingerprints.get(location_id)
+        if not fp:
+            logger.warning("update_hex_location: unknown %s", location_id)
+            return
+
+        fp.centroid_embedding = _running_average(
+            fp.centroid_embedding, embedding, fp.observation_count
+        )
+        fp.observation_count += 1
+        fp.last_visited = datetime.now()
+        self._last_seen_step[location_id] = self._step_counter
+
+        if reconstruction_data:
+            fp.hex_reconstruction_data = reconstruction_data
+
+        node = self._find_node_for_location(location_id)
+        if node:
+            node.last_accessed = datetime.now()
+            node.access_count += 1
+
+        full_label = (
+            f"{fp.parent_label} - {fp.variant_label}" if fp.variant_label else fp.parent_label
+        )
+        self._emit_memory_write(
+            location_id, full_label, is_new=False, observation_count=fp.observation_count
+        )
+
+    # ------------------------------------------------------------------
     # Bootstrap / first frame
     # ------------------------------------------------------------------
 

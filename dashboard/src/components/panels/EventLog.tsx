@@ -11,6 +11,17 @@ const EVENT_TYPE_COLORS: Record<PanoramaEventType, string> = {
   investigation_window: "#f9e2af",
   label_request: "#f38ba8",
   memory_write: "#a6e3a1",
+  hex_scan_started: "#94e2d5",
+  hex_scan_pass: "#94e2d5",
+  hex_scan_complete: "#a6e3a1",
+  focus_update: "#f5c2e7",
+  agent_paused: "#fab387",
+  agent_resumed: "#a6e3a1",
+  agent_step: "#89b4fa",
+  image_advanced: "#89dceb",
+  user_label_confirmed: "#a6e3a1",
+  user_label_rejected: "#f38ba8",
+  reconstruction_requested: "#cba6f7",
 };
 
 interface EventLogProps {

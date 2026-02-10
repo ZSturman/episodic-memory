@@ -77,6 +77,15 @@ export const usePanelStore = create<PanelState>()(
         pollingMs: s.pollingMs,
         sidebarOpen: s.sidebarOpen,
       }),
+      merge: (persisted, current) => {
+        const merged = { ...current, ...(persisted as object) };
+        // Ensure new panel keys exist even if localStorage is stale
+        if (merged.panels) {
+          const defaults = VERBOSITY_PRESETS[merged.verbosity ?? "diagnose"];
+          merged.panels = { ...defaults, ...merged.panels };
+        }
+        return merged;
+      },
     },
   ),
 );

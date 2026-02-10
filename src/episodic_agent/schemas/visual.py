@@ -397,3 +397,73 @@ class VisualAttentionState:
         """Get row, col of most salient cell."""
         max_idx = max(range(len(self.saliency_map)), key=lambda i: self.saliency_map[i])
         return max_idx // GRID_COLS, max_idx % GRID_COLS
+
+
+# =============================================================================
+# Hex-grid visual data schemas
+# =============================================================================
+
+class ReconstructionLayer(str, Enum):
+    """Toggleable layers for location reconstruction visualization."""
+
+    COLOR = "color"
+    EDGES = "edges"
+    TEXTURE = "texture"
+    INTEREST = "interest"
+    DETAIL_LEVEL = "detail_level"
+
+
+class HexCellData(BaseModel):
+    """API-facing data for a single hex cell."""
+
+    q: int = Field(..., description="Axial coordinate q")
+    r: int = Field(..., description="Axial coordinate r")
+    center_x: float = Field(0.0, description="Pixel center X")
+    center_y: float = Field(0.0, description="Pixel center Y")
+    detail_level: int = Field(0, ge=0, le=3)
+    weight: float = Field(0.0, ge=0.0, le=1.0)
+    interest_score: float = Field(0.0, ge=0.0)
+
+    # Features (populated depending on detail level)
+    avg_rgb: list[float] = Field(default_factory=list)
+    brightness: float = 0.0
+    edge_energy: float = 0.0
+    dominant_colors: list[list[float]] = Field(default_factory=list)
+
+    model_config = {"frozen": True}
+
+
+class HexScanData(BaseModel):
+    """API-facing summary of a hex scan result."""
+
+    cells: list[HexCellData] = Field(default_factory=list)
+    hex_size: float = 0.0
+    image_width: int = 0
+    image_height: int = 0
+    scan_pass: int = 0
+    converged: bool = False
+    total_cells: int = 0
+
+    # Focus profile snapshot
+    focus_center_q: int = 0
+    focus_center_r: int = 0
+    focus_fovea_radius: int = 1
+    focus_mid_radius: int = 3
+    focus_outer_radius: int = 6
+
+
+class HexReconstructionData(BaseModel):
+    """Data needed to reconstruct a location's visual appearance."""
+
+    cells: list[HexCellData] = Field(default_factory=list)
+    hex_size: float = 0.0
+    image_width: int = 0
+    image_height: int = 0
+    location_id: str = ""
+    parent_label: str = ""
+    variant_label: str = ""
+    observation_count: int = 0
+    layers: list[str] = Field(
+        default_factory=lambda: ["color", "edges"],
+        description="Available reconstruction layers",
+    )

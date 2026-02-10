@@ -12,6 +12,13 @@ downstream modules (LocationResolverReal) have a forward vector.
 Video files (.mp4, .avi, .mov) are supported as well: frames are
 decoded at a configurable FPS and each decoded frame is treated like
 a single-heading image.
+
+Single-image mode
+-----------------
+When using the hex-grid scanning pipeline, call ``get_current_image()``
+to retrieve the full-resolution image as an RGB numpy array and
+``advance_to_next_image()`` to step to the next source file.  This
+bypasses the viewport-sweep mechanism entirely.
 """
 
 from __future__ import annotations
@@ -328,6 +335,10 @@ class PanoramaSensorProvider(SensorProvider):
     def current_source_name(self) -> str | None:
         return self._current_source.name if self._current_source else None
 
+    @property
+    def current_source_index(self) -> int:
+        return self._source_idx
+
     def get_status(self) -> dict[str, Any]:
         return {
             "image_dir": str(self.image_dir),
@@ -336,8 +347,52 @@ class PanoramaSensorProvider(SensorProvider):
             "frame_id": self._frame_id,
             "exhausted": self._exhausted,
             "current_source": str(self._current_source) if self._current_source else None,
-            "saccade_mode": self._saccade.mode.value,
+            "saccade_mode": self._saccade.mode.value if hasattr(self, '_saccade') else "hex",
         }
+
+    # ------------------------------------------------------------------
+    # Single-image mode (hex-grid pipeline)
+    # ------------------------------------------------------------------
+
+    def get_current_image(self) -> np.ndarray | None:
+        """Return the current full-resolution image as RGB.
+
+        Returns ``None`` when all sources are exhausted or between
+        sources.  The image is converted from BGR (OpenCV default) to
+        RGB for consistency with the hex feature extractor.
+        """
+        if self._current_image is None:
+            return None
+        return cv2.cvtColor(self._current_image, cv2.COLOR_BGR2RGB)
+
+    def get_current_image_path(self) -> Path | None:
+        """Return the filesystem path to the current source file."""
+        return self._current_source
+
+    def advance_to_next_image(self) -> bool:
+        """Advance to the next image source.
+
+        Returns ``True`` if a new image was loaded, ``False`` if no
+        more sources remain.  Video sources are skipped (use
+        ``get_frame()`` for those).
+        """
+        self._source_idx += 1
+        while self._source_idx < len(self._sources):
+            path = self._sources[self._source_idx]
+            if path.suffix.lower() in IMAGE_EXTENSIONS:
+                self._load_next_source()
+                if self._current_image is not None:
+                    return True
+            else:
+                self._source_idx += 1
+        self._exhausted = True
+        return False
+
+    def peek_remaining(self) -> int:
+        """Return the number of remaining sources (including current)."""
+        if self._exhausted:
+            return 0
+        return len(self._sources) - self._source_idx
 
     def stop(self) -> None:
         """Clean up resources."""

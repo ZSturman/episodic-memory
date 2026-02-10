@@ -141,6 +141,39 @@ class PanoramaEventBus:
             pass
 
     # ------------------------------------------------------------------
+    # Hex-specific convenience methods
+    # ------------------------------------------------------------------
+
+    def emit_hex(
+        self,
+        event_type: PanoramaEventType,
+        step: int,
+        payload: dict[str, Any] | None = None,
+    ) -> PanoramaEvent:
+        """Emit a hex-scan event using scanning_image state."""
+        return self.emit_simple(
+            event_type=event_type,
+            step=step,
+            state=PanoramaAgentState.scanning_image,
+            payload=payload or {},
+        )
+
+    def get_hex_events(self, limit: int = 50) -> list[PanoramaEvent]:
+        """Return recent hex-related events."""
+        hex_types = {
+            PanoramaEventType.hex_scan_started,
+            PanoramaEventType.hex_scan_pass,
+            PanoramaEventType.hex_scan_complete,
+            PanoramaEventType.focus_update,
+            PanoramaEventType.user_label_confirmed,
+            PanoramaEventType.user_label_rejected,
+            PanoramaEventType.image_advanced,
+        }
+        with self._lock:
+            matching = [e for e in self._events if e.event_type in hex_types]
+            return matching[-limit:]
+
+    # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
 

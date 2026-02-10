@@ -16,6 +16,11 @@ import { LocationGraphPanel } from "@/components/panels/LocationGraphPanel";
 import { SimilarityHeatmapPanel } from "@/components/panels/SimilarityHeatmapPanel";
 import { EmbeddingVariancePanel } from "@/components/panels/EmbeddingVariancePanel";
 import { ReplayControlsPanel } from "@/components/panels/ReplayControlsPanel";
+import HexGridPanel from "@/components/panels/HexGridPanel";
+import HexControlPanel from "@/components/panels/HexControlPanel";
+import AgentControlPanel from "@/components/panels/AgentControlPanel";
+import ReconstructionPanel from "@/components/panels/ReconstructionPanel";
+import LabelConfirmPanel from "@/components/panels/LabelConfirmPanel";
 
 import { useAgentState } from "@/hooks/useAgentState";
 import { useEvents } from "@/hooks/useEvents";
@@ -25,6 +30,8 @@ import { useFeatures } from "@/hooks/useFeatures";
 import { useGraph } from "@/hooks/useGraph";
 import { useSimilarity } from "@/hooks/useSimilarity";
 import { useReplay } from "@/hooks/useReplay";
+import { useHexScan } from "@/hooks/useHexScan";
+import { useAgentControl } from "@/hooks/useAgentControl";
 import { usePanelStore } from "@/store/panelStore";
 
 export default function DashboardPage() {
@@ -36,6 +43,8 @@ export default function DashboardPage() {
   const graph = useGraph();
   const similarity = useSimilarity();
   const { replay, loadFile, control } = useReplay();
+  const hexScan = useHexScan();
+  const agentControl = useAgentControl();
   const panels = usePanelStore((s) => s.panels);
   const sidebarOpen = usePanelStore((s) => s.sidebarOpen);
 
@@ -133,6 +142,60 @@ export default function DashboardPage() {
 
             {panels.embeddingVariance && (
               <EmbeddingVariancePanel />
+            )}
+
+            {/* Hex grid panels */}
+            {panels.hexGrid && (
+              <div className="lg:col-span-2">
+                <HexGridPanel scan={hexScan.scan} />
+              </div>
+            )}
+
+            {panels.hexControl && (
+              <HexControlPanel
+                scan={hexScan.scan}
+                autoFocus={agentControl.status?.auto_focus ?? true}
+                onAutoFocusChange={agentControl.setAutoFocus}
+              />
+            )}
+
+            {panels.agentControl && (
+              <AgentControlPanel
+                status={agentControl.status}
+                onTogglePause={agentControl.togglePause}
+                onStep={agentControl.requestStep}
+                onAdvance={agentControl.advanceImage}
+                onAutoFocus={agentControl.setAutoFocus}
+              />
+            )}
+
+            {panels.labelConfirm && (
+              <LabelConfirmPanel
+                scan={hexScan.scan}
+                control={agentControl.status}
+                onConfirm={() => hexScan.submitLabel({ response: "confirm" })}
+                onReject={() => hexScan.submitLabel({ response: "reject" })}
+                onNewLabel={(parent, variant) =>
+                  hexScan.submitLabel({
+                    response: "new_label",
+                    parent_label: parent,
+                    variant_label: variant,
+                  })
+                }
+                onVariant={(variant) =>
+                  hexScan.submitLabel({
+                    response: "same_place_different",
+                    variant_label: variant,
+                  })
+                }
+                onSkip={() => hexScan.submitLabel({ response: "skip" })}
+              />
+            )}
+
+            {panels.reconstruction && (
+              <div className="lg:col-span-2">
+                <ReconstructionPanel />
+              </div>
             )}
 
             {/* Replay controls: full width */}
